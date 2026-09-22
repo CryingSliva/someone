@@ -1,0 +1,22 @@
+# 依赖
+node_modules/
+
+# 构建产物（用 node src/build.js 重新生成）
+dist/
+dist-local/
+index.html
+dist.zip
+
+# ⚠️ 账号凭据，绝不提交
+.netlify_token
+.netlify_token.txt
+
+# 库原始文件（体积大，构建只用 .min 版）
+vendor/naive-ui.js
+
+# 系统杂项
+Thumbs.db
+.DS_Store
+
+# ZCode 会话文件
+.zcode/

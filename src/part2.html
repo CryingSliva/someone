@@ -1,0 +1,892 @@
+<script>
+/* ============================================================
+ * ⚙️ 配置区 —— 启用跨设备云同步请填写下面两项（详见 SETUP.md）
+ *    留空 = 本地模式（数据仅保存在当前浏览器）
+ * ============================================================ */
+const CONFIG = {
+  SUPABASE_URL: 'https://abummrfdirxxzeqpxfdc.supabase.co',
+  SUPABASE_ANON_KEY: 'sb_publishable_JBjTBRGsDqysNPbXSyZ14w_BVPTHHea',
+};
+
+/* ---------------- 工具函数 ---------------- */
+const PRIORITY_LABELS = { high: '高优先级', medium: '中优先级', low: '低优先级' };
+const PRIORITY_WEIGHT = { high: 0, medium: 1, low: 2 };
+const REPEAT_LABELS = { daily: '每天', weekly: '每周', monthly: '每月' };
+
+function uuid() {
+  if (window.crypto && crypto.randomUUID) {
+    try { return crypto.randomUUID(); } catch (e) { /* file:// 等环境下回退 */ }
+  }
+  return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, c => {
+    const r = Math.random() * 16 | 0;
+    return (c === 'x' ? r : (r & 0x3 | 0x8)).toString(16);
+  });
+}
+
+function todayStr() {
+  const d = new Date(), p = n => String(n).padStart(2, '0');
+  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`;
+}
+
+function localDateStr(iso) { // ISO 时间 → 本地日期 YYYY-MM-DD（避免 UTC 偏移问题）
+  const d = new Date(iso), p = n => String(n).padStart(2, '0');
+  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`;
+}
+
+function daysBetween(from, to) { // from/to: 'YYYY-MM-DD'
+  const a = new Date(from + 'T00:00:00'), b = new Date(to + 'T00:00:00');
+  return Math.round((b - a) / 86400000);
+}
+
+const app = Vue.createApp({
+  data() {
+    return {
+      tasks: [],
+      view: 'today',            // today | all | stats
+      filter: 'all',
+      sortBy: 'smart',
+      tagFilter: '',
+      newTask: { title: '', priority: 'medium', dueDate: null, remindAt: null, tagsText: '', repeat: '' },
+      showMore: false,
+      expanded: {},             // 子任务展开状态 { taskId: bool }
+      subtaskDraft: {},         // 子任务输入 { taskId: string }
+      editingId: null,
+      editTask: { id: null, title: '', priority: 'medium', due_date: null, remind_at: null, tagsText: '', repeat: '' },
+      // 账号 / 认证
+      user: null,
+      authMode: 'login',
+      authForm: { email: '', password: '' },
+      authError: '',
+      authNotice: '',
+      authBusy: false,
+      // 同步状态
+      online: navigator.onLine,
+      pendingCount: 0,
+      syncing: false,
+      loading: false,
+      toast: '',
+      sb: null,
+      channel: null,
+      // 提醒通知
+      notifPerm: (typeof Notification !== 'undefined') ? Notification.permission : 'denied',
+      // UI（Naive UI 主题 + 深色跟随系统）—— markRaw 防止响应式代理破坏 Naive 内部对象
+      uiDark: false,
+      naiveDark: window.Vue.markRaw(window.naive ? window.naive.darkTheme : null),
+      naiveOverrides: window.Vue.markRaw({
+        common: {
+          primaryColor: '#22d3ee',
+          primaryColorHover: '#67e8f9',
+          primaryColorPressed: '#06b6d4',
+          primaryColorSuppl: '#22d3ee',
+          borderRadius: '10px',
+        },
+      }),
+      priorityOptions: [
+        { label: '🔴 高', value: 'high' },
+        { label: '🟡 中', value: 'medium' },
+        { label: '🔵 低', value: 'low' },
+      ],
+      repeatOptions: [
+        { label: '🔁 不重复', value: '' },
+        { label: '🔁 每天', value: 'daily' },
+        { label: '🔁 每周', value: 'weekly' },
+        { label: '🔁 每月', value: 'monthly' },
+      ],
+      sortOptions: [
+        { label: '智能排序', value: 'smart' },
+        { label: '按截止日期', value: 'due' },
+        { label: '按创建时间', value: 'created' },
+      ],
+      // 个人信息面板
+      showProfile: false,
+      showPwdForm: false,
+      pwdForm: { newPwd: '', confirm: '' },
+      pwdMsg: null,
+      clearArmed: false,
+    };
+  },
+
+  computed: {
+    isCloud() {
+      return !!(CONFIG.SUPABASE_URL && CONFIG.SUPABASE_ANON_KEY && window.supabase);
+    },
+    naiveTheme() {
+      return this.uiDark ? this.naiveDark : null;
+    },
+    canNotify() { return typeof Notification !== 'undefined'; },
+    remaining() { return this.tasks.filter(t => !t.completed).length; },
+    doneCount() { return this.tasks.length - this.remaining; },
+    allDone() { return this.tasks.length > 0 && this.doneCount === this.tasks.length; },
+    filterDefs() {
+      return [
+        { key: 'all', label: '全部', count: this.tasks.length },
+        { key: 'active', label: '未完成', count: this.remaining },
+        { key: 'done', label: '已完成', count: this.doneCount },
+      ];
+    },
+    allTags() {
+      const map = new Map();
+      this.tasks.forEach(t => (t.tags || []).forEach(g => map.set(g, (map.get(g) || 0) + 1)));
+      return [...map.entries()].sort((a, b) => b[1] - a[1]);
+    },
+    /* 今日视图 */
+    overdueTasks() {
+      const today = todayStr();
+      return this.tasks
+        .filter(t => !t.completed && t.due_date && t.due_date < today)
+        .sort((a, b) => a.due_date.localeCompare(b.due_date));
+    },
+    dueTodayTasks() {
+      const today = todayStr();
+      return this.tasks.filter(t => !t.completed && t.due_date === today)
+        .sort((a, b) => this.sortCmp(a, b));
+    },
+    todayDoneCount() {
+      const today = todayStr();
+      return this.tasks.filter(t => t.completed && t.completed_at && localDateStr(t.completed_at) === today).length;
+    },
+    /* 列表（全部视图 / 今日视图共用渲染） */
+    viewList() {
+      if (this.view === 'today') return [...this.overdueTasks, ...this.dueTodayTasks];
+      let list = this.tasks.filter(t =>
+        this.filter === 'all' ? true : this.filter === 'active' ? !t.completed : t.completed);
+      if (this.tagFilter) list = list.filter(t => (t.tags || []).includes(this.tagFilter));
+      return list.slice().sort((a, b) => this.sortCmp(a, b));
+    },
+    viewEmptyText() {
+      if (this.view === 'today') {
+        if (this.overdueTasks.length || this.dueTodayTasks.length) return '';
+        return this.tasks.length
+          ? '今天没有到期任务 🎉 到「全部」视图看看其他安排吧'
+          : '暂无任务，添加第一个吧 ✨';
+      }
+      if (!this.tasks.length) return '暂无任务，添加第一个吧 ✨';
+      if (this.filter === 'active') return '没有未完成的任务，太棒了 🎉';
+      return '还没有已完成的任务';
+    },
+    /* 统计视图 */
+    trend14() {
+      const days = [];
+      for (let i = 13; i >= 0; i--) {
+        const d = new Date();
+        d.setDate(d.getDate() - i);
+        days.push({
+          date: localDateStr(d.toISOString()),
+          label: String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0'),
+          count: 0, isToday: i === 0,
+        });
+      }
+      this.tasks.forEach(t => {
+        if (t.completed && t.completed_at) {
+          const ds = localDateStr(t.completed_at);
+          const hit = days.find(d => d.date === ds);
+          if (hit) hit.count++;
+        }
+      });
+      return days;
+    },
+    maxTrend() { return Math.max(1, ...this.trend14.map(d => d.count)); },
+    priorityStatsList() {
+      const s = { high: 0, medium: 0, low: 0 };
+      this.tasks.forEach(t => { s[t.priority || 'medium']++; });
+      const total = Math.max(1, this.tasks.length);
+      return [
+        { key: 'high', label: '高优先级', count: s.high, pct: Math.round(s.high / total * 100) },
+        { key: 'medium', label: '中优先级', count: s.medium, pct: Math.round(s.medium / total * 100) },
+        { key: 'low', label: '低优先级', count: s.low, pct: Math.round(s.low / total * 100) },
+      ];
+    },
+    emptyText() { return this.viewEmptyText; },
+    syncLabel() {
+      if (!this.online) return '离线';
+      if (this.syncing) return '同步中…';
+      if (this.pendingCount) return `待同步 ${this.pendingCount}`;
+      return '已同步';
+    },
+    syncClass() {
+      if (!this.online) return 'off';
+      if (this.syncing) return 'busy';
+      if (this.pendingCount) return 'pending';
+      return 'ok';
+    },
+    syncTitle() {
+      return this.isCloud ? '数据通过 Supabase 在你的设备间同步' : '';
+    },
+    /* 个人信息面板 */
+    avatarChar() {
+      return this.user && this.user.email ? this.user.email.charAt(0).toUpperCase() : '✓';
+    },    memberSince() {
+      if (!this.user || !this.user.created_at) return '';
+      return new Date(this.user.created_at)
+        .toLocaleDateString('zh-CN', { year: 'numeric', month: 'long', day: 'numeric' });
+    },
+    completionRate() {
+      return this.tasks.length ? Math.round(this.doneCount / this.tasks.length * 100) : 0;
+    },
+  },
+
+  watch: {
+    tasks: {
+      handler() {
+        if (this.isCloud && this.user) this.writeCache();
+        else this.saveLocal();
+      },
+      deep: true,
+    },
+  },
+
+  async mounted() {
+    window.addEventListener('online', () => { this.online = true; this.flushQueue(); });
+    window.addEventListener('offline', () => { this.online = false; });
+
+    if (this.isCloud) {
+      this.sb = supabase.createClient(CONFIG.SUPABASE_URL, CONFIG.SUPABASE_ANON_KEY);
+      const { data: { session } } = await this.sb.auth.getSession();
+      if (session && session.user) await this.onSignedIn(session.user);
+      this.sb.auth.onAuthStateChange((evt, session) => {
+        if (evt === 'SIGNED_OUT') this.onSignedOut();
+        else if (evt === 'SIGNED_IN' && session && !this.user) this.onSignedIn(session.user);
+        else if (evt === 'TOKEN_REFRESHED' && session) this.user = session.user;
+      });
+      setInterval(() => { if (navigator.onLine) this.flushQueue(); }, 30000);
+    } else {
+      this.tasks = this.readLocal();
+    }
+
+    // 深色模式跟随系统
+    this.applySystemDark(matchMedia('(prefers-color-scheme: dark)').matches);
+    matchMedia('(prefers-color-scheme: dark)').addEventListener('change', (e) => {
+      this.applySystemDark(e.matches);
+    });
+
+    // 到期提醒：启动后 5 秒查一次，之后每分钟检查
+    setTimeout(() => this.checkReminders(), 5000);
+    setInterval(() => this.checkReminders(), 60000);
+  },
+
+  methods: {
+    /* ---------------- 排序 / 展示 ---------------- */
+    sortCmp(a, b) {
+      if (a.completed !== b.completed) return a.completed ? 1 : -1; // 未完成在前
+      const createdCmp = (b.created_at || '').localeCompare(a.created_at || '');
+      if (this.sortBy === 'created') return createdCmp;
+      if (this.sortBy === 'due') {
+        if (!a.due_date && !b.due_date) return createdCmp;
+        if (!a.due_date) return 1;
+        if (!b.due_date) return -1;
+        return a.due_date.localeCompare(b.due_date) || createdCmp;
+      }
+      // 智能排序：优先级 → 截止日期 → 创建时间
+      const pa = PRIORITY_WEIGHT[a.priority] ?? 1, pb = PRIORITY_WEIGHT[b.priority] ?? 1;
+      if (pa !== pb) return pa - pb;
+      if (!!a.due_date !== !!b.due_date) return a.due_date ? -1 : 1;
+      if (a.due_date && a.due_date !== b.due_date) return a.due_date.localeCompare(b.due_date);
+      return createdCmp;
+    },
+
+    priorityLabel(p) { return PRIORITY_LABELS[p] || '中优先级'; },
+    repeatLabel(r) { return REPEAT_LABELS[r] || ''; },
+
+    isOverdue(task) {
+      return !!task.due_date && !task.completed && task.due_date < todayStr();
+    },
+
+    dueClass(task) {
+      if (this.isOverdue(task)) return 'overdue';
+      if (task.due_date) {
+        const d = daysBetween(todayStr(), task.due_date);
+        if (d >= 0 && d <= 2) return 'soon';
+      }
+      return '';
+    },
+
+    dueLabel(task) {
+      const today = todayStr();
+      if (task.due_date < today) {
+        const late = daysBetween(task.due_date, today);
+        return task.completed ? `截止 ${task.due_date}` : `已逾期 ${late} 天`;
+      }
+      if (task.due_date === today) return '今天到期';
+      const d = daysBetween(today, task.due_date);
+      if (d === 1) return '明天到期';
+      return `${d} 天后到期`;
+    },
+
+    fmtRemind(iso) {
+      const d = new Date(iso), p = n => String(n).padStart(2, '0');
+      return `${p(d.getMonth() + 1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}`;
+    },
+
+    toLocalInputValue(iso) {
+      if (!iso) return '';
+      const d = new Date(iso), p = n => String(n).padStart(2, '0');
+      return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}`;
+    },
+
+    parseLocalDateTime(s) { // 'yyyy-MM-dd HH:mm'（n-date-picker 的值）→ ISO
+      return s ? new Date(s.replace(' ', 'T')).toISOString() : null;
+    },
+
+    showToast(msg) {
+      this.toast = msg;
+      clearTimeout(this._toastTimer);
+      this._toastTimer = setTimeout(() => { this.toast = ''; }, 2600);
+    },
+
+    /* ---------------- 本地增删改 ---------------- */
+    addTask() {
+      if (!this.newTask.title) return;
+      const now = new Date().toISOString();
+      const task = {
+        id: uuid(),
+        title: this.newTask.title,
+        completed: false,
+        priority: this.newTask.priority,
+        due_date: this.newTask.dueDate || null,
+        remind_at: this.parseLocalDateTime(this.newTask.remindAt),
+        repeat: this.newTask.repeat || null,
+        tags: this.parseTags(this.newTask.tagsText),
+        subtasks: [],
+        created_at: now,
+        updated_at: now,
+        completed_at: null,
+      };
+      this.tasks.unshift(task);
+      this.newTask = { title: '', priority: 'medium', dueDate: null, remindAt: null, tagsText: '', repeat: '' };
+      this.showMore = false;
+      if (this.isCloud && this.user) this.cloudMutate('upsert', task);
+    },
+
+    toggleTask(task) {
+      task.completed = !task.completed;
+      task.completed_at = task.completed ? new Date().toISOString() : null;
+      task.updated_at = new Date().toISOString();
+      let next = null;
+      if (task.completed && task.repeat) next = this.nextOccurrence(task);
+      if (this.isCloud && this.user) {
+        this.cloudMutate('upsert', task);
+        if (next) this.cloudMutate('upsert', next);
+      }
+      if (next) {
+        this.tasks.unshift(next);
+        this.showToast(`🔁 已生成下一期：${next.due_date}`);
+      }
+    },
+
+    nextOccurrence(task) {
+      const now = new Date().toISOString();
+      return {
+        ...task,
+        id: uuid(),
+        completed: false,
+        completed_at: null,
+        created_at: now,
+        updated_at: now,
+        due_date: this.advanceDate(task.due_date, task.repeat),
+        remind_at: task.remind_at ? this.advanceDateTime(task.remind_at, task.repeat) : null,
+        subtasks: (task.subtasks || []).map(s => ({ id: uuid(), title: s.title, done: false })),
+      };
+    },
+
+    advanceDate(dateStr, repeat) {
+      const d = dateStr ? new Date(dateStr + 'T00:00:00') : new Date();
+      if (repeat === 'daily') d.setDate(d.getDate() + 1);
+      else if (repeat === 'weekly') d.setDate(d.getDate() + 7);
+      else if (repeat === 'monthly') d.setMonth(d.getMonth() + 1);
+      const p = n => String(n).padStart(2, '0');
+      return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`;
+    },
+
+    advanceDateTime(iso, repeat) {
+      const d = new Date(iso);
+      if (repeat === 'daily') d.setDate(d.getDate() + 1);
+      else if (repeat === 'weekly') d.setDate(d.getDate() + 7);
+      else if (repeat === 'monthly') d.setMonth(d.getMonth() + 1);
+      return d.toISOString();
+    },
+
+    removeTask(task) {
+      this.tasks = this.tasks.filter(t => t.id !== task.id);
+      if (this.editingId === task.id) this.editingId = null;
+      if (this.isCloud && this.user) this.cloudMutate('delete', task);
+    },
+
+    toggleAll() {
+      const target = !this.allDone;
+      const changed = this.tasks.filter(t => t.completed !== target);
+      const now = new Date().toISOString();
+      changed.forEach(t => {
+        t.completed = target;
+        t.completed_at = target ? now : null;
+        t.updated_at = now;
+      });
+      if (this.isCloud && this.user) changed.forEach(t => this.cloudMutate('upsert', t));
+    },
+
+    clearCompleted() {
+      const done = this.tasks.filter(t => t.completed);
+      if (!done.length) return;
+      this.tasks = this.tasks.filter(t => !t.completed);
+      if (this.isCloud && this.user) done.forEach(t => this.cloudMutate('delete', t));
+      this.showToast(`已清除 ${done.length} 项已完成任务`);
+    },
+
+    /* ---------------- 标签 ---------------- */
+    parseTags(text) {
+      return [...new Set(String(text || '').split(/[,，、\s]+/).map(s => s.trim()).filter(Boolean))].slice(0, 5);
+    },
+
+    setTagFilter(tag) {
+      if (this.tagFilter === tag) { this.tagFilter = ''; return; }
+      this.tagFilter = tag;
+      this.view = 'all';
+    },
+
+    /* ---------------- 子任务 ---------------- */
+    toggleExpand(id) {
+      this.expanded = { ...this.expanded, [id]: !this.expanded[id] };
+    },
+
+    doneSubCount(task) {
+      return (task.subtasks || []).filter(s => s.done).length;
+    },
+
+    addSubtask(task) {
+      const title = (this.subtaskDraft[task.id] || '').trim();
+      if (!title) return;
+      task.subtasks = [...(task.subtasks || []), { id: uuid(), title, done: false }];
+      task.updated_at = new Date().toISOString();
+      this.subtaskDraft = { ...this.subtaskDraft, [task.id]: '' };
+      if (this.isCloud && this.user) this.cloudMutate('upsert', task);
+    },
+
+    toggleSubtask(task, sub) {
+      sub.done = !sub.done;
+      task.updated_at = new Date().toISOString();
+      if (this.isCloud && this.user) this.cloudMutate('upsert', task);
+    },
+
+    removeSubtask(task, sub) {
+      task.subtasks = task.subtasks.filter(s => s.id !== sub.id);
+      task.updated_at = new Date().toISOString();
+      if (this.isCloud && this.user) this.cloudMutate('upsert', task);
+    },
+
+    /* ---------------- 深色模式 ---------------- */
+    applySystemDark(dark) {
+      this.uiDark = dark;
+      document.documentElement.classList.toggle('dark', dark);
+      const meta = document.querySelector('meta[name="theme-color"]');
+      if (meta) meta.content = dark ? '#05070f' : '#f4f6fb';
+    },
+
+    /* ---------------- 到期提醒 ---------------- */
+    requestNotif() {
+      Notification.requestPermission().then(p => {
+        this.notifPerm = p;
+        this.showToast(p === 'granted' ? '🔔 提醒已开启' : '未开启提醒（浏览器权限被拒绝）');
+      });
+    },
+
+    checkReminders() {
+      if (this.notifPerm !== 'granted' || !this.tasks.length) return;
+      const now = Date.now();
+      let store = {};
+      try { store = JSON.parse(localStorage.getItem('todo.reminded') || '{}'); } catch (e) {}
+      let dirty = false;
+      for (const t of this.tasks) {
+        if (!t.remind_at || t.completed) continue;
+        const ts = new Date(t.remind_at).getTime();
+        const key = t.id + '|' + t.remind_at;
+        // 已到提醒时间、未超过 1 天、且没提醒过
+        if (ts <= now && ts > now - 86400000 && !store[key]) {
+          try {
+            new Notification('⏰ 待办提醒', { body: t.title, tag: key });
+          } catch (e) { /* 某些环境不支持构造，忽略 */ }
+          store[key] = 1;
+          dirty = true;
+        }
+      }
+      if (dirty) {
+        try { localStorage.setItem('todo.reminded', JSON.stringify(store)); } catch (e) {}
+      }
+    },
+
+    /* ---------------- 编辑 ---------------- */
+    startEdit(task) {
+      this.editingId = task.id;
+      this.editTask = {
+        id: task.id,
+        title: task.title,
+        priority: task.priority || 'medium',
+        due_date: task.due_date || null,
+        remind_at: this.toLocalInputValue(task.remind_at) || null,
+        tagsText: (task.tags || []).join(', '),
+        repeat: task.repeat || '',
+      };
+      this.$nextTick(() => {
+        const el = document.querySelector('.task-edit .input-title');
+        if (el) { el.focus(); el.select(); }
+      });
+    },
+
+    saveEdit() {
+      if (!this.editTask.title) return;
+      const t = this.tasks.find(x => x.id === this.editingId);
+      if (t) {
+        t.title = this.editTask.title;
+        t.priority = this.editTask.priority;
+        t.due_date = this.editTask.due_date || null;
+        t.remind_at = this.parseLocalDateTime(this.editTask.remind_at);
+        t.repeat = this.editTask.repeat || null;
+        t.tags = this.parseTags(this.editTask.tagsText);
+        t.updated_at = new Date().toISOString();
+        if (this.isCloud && this.user) this.cloudMutate('upsert', t);
+      }
+      this.editingId = null;
+    },
+
+    cancelEdit() { this.editingId = null; },
+
+    /* ---------------- 个人信息面板 ---------------- */
+    closeProfile() {
+      this.showProfile = false;
+      this.showPwdForm = false;
+      this.pwdMsg = null;
+      this.clearArmed = false;
+    },
+
+    async changePassword() {
+      if (this.pwdForm.newPwd.length < 6) {
+        this.pwdMsg = { ok: false, text: '密码至少需要 6 位' };
+        return;
+      }
+      if (this.pwdForm.newPwd !== this.pwdForm.confirm) {
+        this.pwdMsg = { ok: false, text: '两次输入的密码不一致' };
+        return;
+      }
+      try {
+        const { error } = await this.sb.auth.updateUser({ password: this.pwdForm.newPwd });
+        if (error) throw error;
+        this.pwdMsg = { ok: true, text: '✅ 密码已修改' };
+        this.pwdForm = { newPwd: '', confirm: '' };
+        setTimeout(() => { this.showPwdForm = false; this.pwdMsg = null; }, 2000);
+      } catch (e) {
+        const msg = (e && e.message) || String(e);
+        this.pwdMsg = {
+          ok: false,
+          text: /at least 6/i.test(msg) ? '密码至少需要 6 位'
+            : /Failed to fetch|NetworkError|fetch failed/i.test(msg) ? '网络错误，请稍后重试'
+            : '修改失败：' + msg,
+        };
+      }
+    },
+
+    exportTasks() {
+      if (!this.tasks.length) { this.showToast('暂无任务可导出'); return; }
+      const data = JSON.stringify({
+        app: '待办清单', exported_at: new Date().toISOString(),
+        account: this.user ? this.user.email : 'local', tasks: this.tasks,
+      }, null, 2);
+      const blob = new Blob([data], { type: 'application/json' });
+      const a = document.createElement('a');
+      a.href = URL.createObjectURL(blob);
+      a.download = 'todo-backup-' + new Date().toISOString().slice(0, 10) + '.json';
+      a.click();
+      URL.revokeObjectURL(a.href);
+      this.showToast(`已导出 ${this.tasks.length} 条任务`);
+    },
+
+    confirmClearAll() {
+      if (!this.clearArmed) { // 第一次点击：进入确认状态，3 秒内再点才执行
+        this.clearArmed = true;
+        clearTimeout(this._clearTimer);
+        this._clearTimer = setTimeout(() => { this.clearArmed = false; }, 3000);
+        return;
+      }
+      clearTimeout(this._clearTimer);
+      this.clearArmed = false;
+      const all = [...this.tasks];
+      this.tasks = [];
+      if (this.isCloud && this.user) all.forEach(t => this.cloudMutate('delete', t));
+      this.showToast('已清空全部任务');
+      this.closeProfile();
+    },
+
+    /* ---------------- 账号 ---------------- */
+    toggleAuthMode() {
+      this.authMode = this.authMode === 'login' ? 'register' : 'login';
+      this.authError = '';
+      this.authNotice = '';
+    },
+
+    async submitAuth() {
+      this.authError = '';
+      this.authNotice = '';
+      if (this.authForm.password.length < 6) {
+        this.authError = '密码至少需要 6 位';
+        return;
+      }
+      this.authBusy = true;
+      try {
+        if (this.authMode === 'login') {
+          const { data, error } = await this.sb.auth.signInWithPassword({
+            email: this.authForm.email, password: this.authForm.password,
+          });
+          if (error) throw error;
+          await this.onSignedIn(data.user);
+        } else {
+          const { data, error } = await this.sb.auth.signUp({
+            email: this.authForm.email, password: this.authForm.password,
+          });
+          if (error) throw error;
+          if (data.session) {
+            await this.onSignedIn(data.user); // 项目未开启邮箱确认 → 直接登录
+          } else {
+            this.authNotice = '注册成功！请到邮箱点击确认链接后再登录。';
+            this.authMode = 'login';
+          }
+        }
+      } catch (e) {
+        this.authError = this.friendlyAuthError(e);
+      } finally {
+        this.authBusy = false;
+      }
+    },
+
+    friendlyAuthError(e) {
+      const msg = (e && (e.message || e.msg)) || String(e || '');
+      if (/Invalid login credentials/i.test(msg)) return '邮箱或密码错误';
+      if (/User already registered/i.test(msg)) return '该邮箱已注册，请直接登录';
+      if (/Email not confirmed/i.test(msg)) return '邮箱尚未确认，请先到邮箱点击确认链接';
+      if (/Password should be at least/i.test(msg)) return '密码至少需要 6 位';
+      if (/Failed to fetch|NetworkError|fetch failed|load failed/i.test(msg)) return '网络连接失败，请检查网络后重试';
+      return '操作失败：' + msg;
+    },
+
+    async onSignedIn(user) {
+      this.user = user;
+      this.pendingCount = this.readQueue().length;
+      await this.loadTasks();
+      this.subscribeRealtime();
+    },
+
+    async logout() {
+      this.closeProfile();
+      try {
+        if (this.channel) { await this.sb.removeChannel(this.channel); this.channel = null; }
+        await this.sb.auth.signOut();
+      } catch (e) { /* 忽略退出时的网络错误 */ }
+      this.onSignedOut();
+    },
+
+    onSignedOut() {
+      this.user = null;
+      this.tasks = [];
+      this.editingId = null;
+      this.view = 'today';
+      this.pendingCount = 0;
+      this.authForm.password = '';
+      this.authMode = 'login';
+    },
+
+    /* ---------------- 云端数据加载 / 实时同步 ---------------- */
+    async loadTasks() {
+      this.loading = true;
+      try {
+        const { data, error } = await this.sb.from('tasks')
+          .select('*').order('created_at', { ascending: false });
+        if (error) throw error;
+        let list = (data || []).map(t => ({ ...t, subtasks: t.subtasks || [], tags: t.tags || [] }));
+        // 把尚未同步的本地队列叠加到服务端数据上，避免离线改动丢失
+        const queue = this.readQueue();
+        if (queue.length) {
+          const map = new Map(list.map(t => [t.id, t]));
+          for (const op of queue) {
+            if (op.type === 'delete') map.delete(op.data.id);
+            else map.set(op.data.id, { ...(map.get(op.data.id) || {}), ...op.data });
+          }
+          list = [...map.values()];
+        }
+        this.tasks = list;
+        this.writeCache();
+      } catch (e) {
+        this.tasks = this.readCache().map(t => ({ ...t, subtasks: t.subtasks || [], tags: t.tags || [] })); // 网络失败 → 使用本地缓存
+        if (!this.tasks.length) this.showToast('云端加载失败，正在显示本地缓存');
+      } finally {
+        this.loading = false;
+      }
+    },
+
+    subscribeRealtime() {
+      if (this.channel) { this.sb.removeChannel(this.channel); this.channel = null; }
+      this.channel = this.sb.channel('tasks-realtime')
+        .on('postgres_changes',
+          { event: '*', schema: 'public', table: 'tasks', filter: 'user_id=eq.' + this.user.id },
+          payload => this.onRealtimeChange(payload))
+        .subscribe();
+    },
+
+    onRealtimeChange(payload) {
+      const { eventType, new: newRow, old: oldRow } = payload;
+      const queue = this.readQueue();
+      if (eventType === 'INSERT' || eventType === 'UPDATE') {
+        if (!newRow || !newRow.id) return;
+        // 该行存在未同步的本地修改时，保留本地版本，等队列冲刷后自然对齐
+        if (queue.some(op => op.data.id === newRow.id && op.type !== 'delete')) return;
+        const normalized = { ...newRow, subtasks: newRow.subtasks || [], tags: newRow.tags || [] };
+        const i = this.tasks.findIndex(t => t.id === newRow.id);
+        if (i >= 0) this.tasks.splice(i, 1, { ...this.tasks[i], ...normalized });
+        else this.tasks.unshift(normalized);
+      } else if (eventType === 'DELETE') {
+        if (!oldRow || !oldRow.id) return;
+        if (queue.some(op => op.data.id === oldRow.id && op.type !== 'delete')) return;
+        this.tasks = this.tasks.filter(t => t.id !== oldRow.id);
+      }
+    },
+
+    /* ---------------- 云端写入 + 离线队列 ---------------- */
+    toRow(task) {
+      return {
+        id: task.id,
+        user_id: this.user.id,
+        title: task.title,
+        completed: !!task.completed,
+        priority: task.priority || 'medium',
+        due_date: task.due_date || null,
+        remind_at: task.remind_at || null,
+        repeat: task.repeat || null,
+        tags: task.tags || [],
+        subtasks: task.subtasks || [],
+        created_at: task.created_at,
+        updated_at: task.updated_at,
+        completed_at: task.completed_at || null,
+      };
+    },
+
+    isNetworkError(e) {
+      const msg = (e && e.message) || String(e || '');
+      return /Failed to fetch|NetworkError|fetch failed|load failed|network/i.test(msg);
+    },
+
+    isSchemaError(e) {
+      // 云端数据库缺少新功能字段（subtasks/tags/…）时 PostgREST 返回 PGRST204
+      const msg = (e && (e.message || e.code)) || '';
+      return /PGRST204|schema cache|Could not find the .* column/i.test(String(msg));
+    },
+
+    async cloudMutate(type, task) {
+      const queue = this.readQueue();
+      if (queue.length) { // 已处于离线积压状态：直接入队，保持顺序
+        queue.push({ type, data: task });
+        this.writeQueue(queue);
+        return;
+      }
+      this.syncing = true;
+      try {
+        const { error } = type === 'delete'
+          ? await this.sb.from('tasks').delete().eq('id', task.id)
+          : await this.sb.from('tasks').upsert(this.toRow(task));
+        if (error) throw error;
+      } catch (e) {
+        if (!navigator.onLine || this.isNetworkError(e)) {
+          queue.push({ type, data: task });
+          this.writeQueue(queue);
+        } else if (this.isSchemaError(e)) {
+          this.showToast('云端数据库需要升级：请按 SETUP.md 运行「v3 升级 SQL」');
+        } else {
+          this.showToast('同步失败：' + ((e && e.message) || e));
+        }
+      } finally {
+        this.syncing = false;
+      }
+    },
+
+    async flushQueue() {
+      if (!this.isCloud || !this.user || this.syncing) return;
+      const queue = this.readQueue();
+      if (!queue.length) return;
+      this.syncing = true;
+      const remain = [];
+      let offlineHit = false;
+      for (let i = 0; i < queue.length; i++) {
+        const op = queue[i];
+        try {
+          if (op.type === 'delete') {
+            const { error } = await this.sb.from('tasks').delete().eq('id', op.data.id);
+            if (error) throw error;
+          } else {
+            const { error } = await this.sb.from('tasks').upsert(this.toRow(op.data));
+            if (error) throw error;
+          }
+        } catch (e) {
+          if (!navigator.onLine || this.isNetworkError(e)) {
+            remain.push(...queue.slice(i)); // 网络中断：剩余全部保留
+            offlineHit = true;
+            break;
+          }
+          // 非网络错误（如数据冲突）：丢弃该条并提示，避免队列卡死
+          this.showToast('一条更改同步失败已跳过：' + ((e && e.message) || e));
+        }
+      }
+      this.writeQueue(remain);
+      this.syncing = false;
+      if (!remain.length && !offlineHit) this.showToast('✅ 所有更改已同步');
+    },
+
+    /* ---------------- localStorage 读写 ---------------- */
+    saveLocal() {
+      try { localStorage.setItem('todo.tasks.v1', JSON.stringify(this.tasks)); } catch (e) {}
+    },
+    readLocal() {
+      try {
+        const raw = localStorage.getItem('todo.tasks.v1');
+        const list = JSON.parse(raw || '[]');
+        return (Array.isArray(list) ? list.filter(t => t && t.id && t.title) : [])
+          .map(t => ({ ...t, subtasks: t.subtasks || [], tags: t.tags || [] }));
+      } catch (e) { return []; }
+    },
+    cacheKey() { return 'todo.cloud.' + (this.user ? this.user.id : 'anon'); },
+    writeCache() {
+      try { localStorage.setItem(this.cacheKey() + '.cache', JSON.stringify(this.tasks)); } catch (e) {}
+    },
+    readCache() {
+      try {
+        const list = JSON.parse(localStorage.getItem(this.cacheKey() + '.cache') || '[]');
+        return Array.isArray(list) ? list : [];
+      } catch (e) { return []; }
+    },
+    readQueue() {
+      try {
+        const q = JSON.parse(localStorage.getItem(this.cacheKey() + '.queue') || '[]');
+        return Array.isArray(q) ? q : [];
+      } catch (e) { return []; }
+    },
+    writeQueue(q) {
+      this.pendingCount = q.length;
+      try {
+        if (q.length) localStorage.setItem(this.cacheKey() + '.queue', JSON.stringify(q));
+        else localStorage.removeItem(this.cacheKey() + '.queue');
+      } catch (e) {}
+    },
+  },
+});
+
+/* Naive UI 组件注册（全局构建，详见 vendor/naive-ui.min.js） */
+if (window.naive) {
+  app.use(window.naive.default || window.naive);
+}
+app.mount('#app');
+
+/* ---------------- PWA：注册 Service Worker（离线缓存）----------------
+ * 仅在线上（https）或本地开发服务器（localhost）注册；
+ * 双击 file:// 打开时自动跳过，不影响使用。 */
+if ('serviceWorker' in navigator &&
+    (location.protocol === 'https:' || location.hostname === 'localhost' || location.hostname === '127.0.0.1')) {
+  window.addEventListener('load', () => {
+    navigator.serviceWorker.register('./sw.js').catch(() => {});
+  });
+}
+</script>
+</body>
+</html>

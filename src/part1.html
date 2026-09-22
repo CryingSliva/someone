@@ -1,0 +1,604 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+<meta name="theme-color" content="#05070f">
+<title>待办清单</title>
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>✅</text></svg>">
+<!-- PWA：安装到手机/电脑桌面 -->
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="apple-touch-icon" href="icons/apple-touch-icon.png">
+<meta name="description" content="跨设备实时同步的待办清单应用">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="待办清单">
+<script>/* 深色模式预应用：避免刷新闪烁 */ try { if (matchMedia('(prefers-color-scheme: dark)').matches) document.documentElement.classList.add('dark'); } catch (e) {}</script>
+<style>
+:root {
+  color-scheme: light dark;
+  --bg: #f4f6fb;
+  --surface: rgba(255,255,255,.74);
+  --surface-solid: #ffffff;
+  --text: #0f172a;
+  --muted: #5b6b82;
+  --border: rgba(15,23,42,.12);
+  --accent: #0891b2;
+  --accent-bright: #0891b2;
+  --accent-2: #6366f1;
+  --glow: rgba(6,182,212,.14);
+  --glow2: rgba(99,102,241,.12);
+  --grid-color: rgba(15,23,42,.05);
+  --card-shadow: 0 8px 28px rgba(15,23,42,.08), 0 1px 2px rgba(15,23,42,.05);
+  --shadow-lg: 0 18px 50px rgba(15,23,42,.16);
+  --danger: #e11d48; --danger-soft: #ffe4e6; --danger-text: #be123c;
+  --warn-soft: #fef3c7; --warn-text: #92400e;
+  --ok: #059669;
+}
+html.dark {
+  --bg: #05070f;
+  --surface: rgba(15,22,38,.62);
+  --surface-solid: #0d1220;
+  --text: #e2e8f0;
+  --muted: #8b98ad;
+  --border: rgba(148,163,184,.16);
+  --accent: #22d3ee;
+  --accent-bright: #67e8f9;
+  --accent-2: #818cf8;
+  --glow: rgba(34,211,238,.10);
+  --glow2: rgba(99,102,241,.13);
+  --grid-color: rgba(148,163,184,.055);
+  --card-shadow: 0 10px 34px rgba(0,0,0,.45), inset 0 1px 0 rgba(148,163,184,.06);
+  --shadow-lg: 0 24px 60px rgba(0,0,0,.55);
+  --danger: #fb7185; --danger-soft: #3f1d2b; --danger-text: #fda4af;
+  --warn-soft: #33290f; --warn-text: #fcd34d;
+  --ok: #34d399;
+}
+[v-cloak] { display: none !important; }
+* { box-sizing: border-box; }
+html, body { margin: 0; padding: 0; }
+body {
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif;
+  color: var(--text);
+  line-height: 1.5;
+  -webkit-font-smoothing: antialiased;
+  background:
+    radial-gradient(900px 520px at 10% -10%, var(--glow), transparent 62%),
+    radial-gradient(820px 480px at 94% 4%, var(--glow2), transparent 60%),
+    linear-gradient(var(--grid-color) 1px, transparent 1px),
+    linear-gradient(90deg, var(--grid-color) 1px, transparent 1px),
+    var(--bg);
+  background-size: auto, auto, 44px 44px, 44px 44px, auto;
+  background-attachment: fixed;
+  min-height: 100vh;
+}
+button { font-family: inherit; }
+input, select { font-family: inherit; }
+
+.glass {
+  background: var(--surface);
+  backdrop-filter: blur(16px);
+  -webkit-backdrop-filter: blur(16px);
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  box-shadow: var(--card-shadow);
+}
+
+.wrap {
+  max-width: 680px;
+  margin: 0 auto;
+  padding: calc(26px + env(safe-area-inset-top)) 16px calc(48px + env(safe-area-inset-bottom));
+}
+
+/* ---------- 头部 ---------- */
+.header {
+  display: flex; align-items: center; justify-content: space-between;
+  flex-wrap: wrap; gap: 8px; margin-bottom: 14px;
+}
+.header-left { display: flex; align-items: center; gap: 10px; }
+.logo {
+  font-size: 25px; font-weight: 800; margin: 0; letter-spacing: .5px;
+  background: linear-gradient(120deg, var(--accent-bright), var(--accent-2));
+  -webkit-background-clip: text; background-clip: text;
+  -webkit-text-fill-color: transparent; color: transparent;
+}
+.badge {
+  font-size: 11px; font-weight: 700; padding: 2px 10px; border-radius: 999px;
+  letter-spacing: 1px; border: 1px solid var(--border); color: var(--muted);
+}
+.badge-cloud {
+  color: var(--accent); border-color: transparent;
+  background: linear-gradient(120deg, rgba(34,211,238,.14), rgba(99,102,241,.14));
+}
+.header-right { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.user-email { font-size: 13px; color: var(--muted); max-width: 180px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.sync-dot {
+  font-size: 11px; font-weight: 700; padding: 2px 10px; border-radius: 999px;
+  border: 1px solid var(--border); letter-spacing: .5px;
+}
+.sync-dot.ok { color: var(--ok); border-color: color-mix(in srgb, var(--ok) 40%, transparent); }
+.sync-dot.off { color: var(--muted); }
+.sync-dot.pending { color: var(--warn-text); border-color: color-mix(in srgb, var(--warn-text) 40%, transparent); }
+.sync-dot.busy { color: var(--accent); animation: pulse 1.2s infinite; }
+@keyframes pulse { 50% { opacity: .5; } }
+
+/* ---------- 视图切换 ---------- */
+.view-nav { display: flex; align-items: center; gap: 6px; margin-bottom: 14px; flex-wrap: wrap; }
+.view-nav button {
+  border: 1px solid var(--border); background: var(--surface); color: var(--muted);
+  backdrop-filter: blur(12px); -webkit-backdrop-filter: blur(12px);
+  padding: 6px 16px; border-radius: 999px; font-size: 14px; font-weight: 600; transition: all .18s;
+}
+.view-nav button.active {
+  background: linear-gradient(120deg, var(--accent), var(--accent-2));
+  border-color: transparent; color: #fff;
+  box-shadow: 0 4px 18px color-mix(in srgb, var(--accent) 35%, transparent);
+}
+.view-nav .notif-btn { margin-left: auto; color: var(--warn-text); }
+.view-nav .notif-btn.granted { color: var(--ok); }
+
+/* ---------- 今日摘要 ---------- */
+.today-summary {
+  display: flex; gap: 10px; flex-wrap: wrap; font-size: 13px; color: var(--muted);
+  padding: 9px 16px; margin-bottom: 12px;
+}
+.today-summary b { color: var(--text); }
+
+/* ---------- 添加表单 ---------- */
+.add-form { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; padding: 12px; margin-bottom: 14px; }
+.add-form .title-input { flex: 1 1 100%; }
+.more-row { display: flex; gap: 8px; flex-wrap: wrap; flex-basis: 100%; }
+
+/* ---------- 工具栏 ---------- */
+.toolbar { display: flex; align-items: center; justify-content: space-between; gap: 8px; flex-wrap: wrap; margin-bottom: 10px; }
+.filters { display: flex; gap: 4px; padding: 3px; border-radius: 999px; }
+.filters button {
+  border: none; background: transparent; color: var(--muted);
+  padding: 5px 13px; border-radius: 999px; font-size: 13px; font-weight: 600; transition: all .15s;
+}
+.filters button.active { background: linear-gradient(120deg, var(--accent), var(--accent-2)); color: #fff; }
+.toolbar-right { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.toggle-all { display: flex; align-items: center; gap: 5px; font-size: 13px; color: var(--muted); cursor: pointer; }
+
+/* ---------- 标签筛选 ---------- */
+.tag-filters { display: flex; gap: 6px; flex-wrap: wrap; margin-bottom: 10px; }
+.tag-filters button {
+  border: 1px solid var(--border); background: var(--surface); color: var(--muted);
+  font-size: 12px; font-weight: 600; padding: 3px 11px; border-radius: 999px;
+}
+.tag-filters button.active { background: linear-gradient(120deg, var(--accent), var(--accent-2)); border-color: transparent; color: #fff; }
+
+/* ---------- 提示横幅 ---------- */
+.banner { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 9px 14px; border-radius: 12px; font-size: 13px; margin-bottom: 12px; }
+.banner.warn { background: var(--warn-soft); color: var(--warn-text); border: 1px solid color-mix(in srgb, var(--warn-text) 25%, transparent); }
+
+/* ---------- 任务列表 ---------- */
+.task-list { list-style: none; margin: 0; padding: 0; }
+.task-item {
+  background: var(--surface);
+  backdrop-filter: blur(16px); -webkit-backdrop-filter: blur(16px);
+  border: 1px solid var(--border); border-radius: 13px;
+  padding: 10px 12px; margin-bottom: 8px;
+  box-shadow: var(--card-shadow);
+  transition: border-color .18s, box-shadow .18s, transform .18s;
+}
+.task-item:hover {
+  border-color: color-mix(in srgb, var(--accent) 45%, var(--border));
+  box-shadow: var(--card-shadow), 0 0 24px color-mix(in srgb, var(--accent) 12%, transparent);
+}
+.task-item.overdue-top { border-left: 3px solid var(--danger); }
+.task-view { display: flex; align-items: flex-start; gap: 10px; }
+.task-main { flex: 1; min-width: 0; cursor: default; }
+.task-title { font-size: 15px; word-break: break-word; }
+.task-item.done .task-title { color: var(--muted); text-decoration: line-through; }
+.task-meta { display: flex; align-items: center; gap: 8px; margin-top: 4px; flex-wrap: wrap; }
+.priority-tag {
+  font-size: 11px; font-weight: 700; padding: 1px 9px; border-radius: 999px;
+  border: 1px solid transparent; letter-spacing: .5px;
+}
+.priority-tag.p-high { color: var(--danger-text); background: var(--danger-soft); }
+.priority-tag.p-medium { color: var(--warn-text); background: var(--warn-soft); }
+.priority-tag.p-low { color: var(--accent); background: color-mix(in srgb, var(--accent) 12%, transparent); }
+.due { font-size: 12px; color: var(--muted); }
+.due.soon { color: var(--warn-text); font-weight: 600; }
+.due.overdue { color: var(--danger-text); font-weight: 700; }
+.task-item.done .due.overdue { color: var(--muted); font-weight: 400; }
+.repeat-ico { font-size: 12px; color: var(--accent); font-weight: 600; }
+.tag-chip {
+  font-size: 11px; font-weight: 600; padding: 1px 9px; border-radius: 999px;
+  background: transparent; border: 1px solid var(--border); color: var(--muted);
+}
+.tag-chip.clickable { cursor: pointer; }
+.tag-chip.clickable:hover { color: var(--accent); border-color: var(--accent); }
+.subtask-chip {
+  border: 1px solid var(--border); background: transparent; color: var(--muted);
+  font-size: 11px; font-weight: 700; padding: 1px 9px; border-radius: 999px;
+}
+.subtask-chip.open { color: var(--accent); border-color: var(--accent); }
+.icon-btn {
+  border: none; background: transparent; color: var(--muted); font-size: 14px;
+  padding: 4px 7px; border-radius: 8px; line-height: 1; opacity: 0; transition: opacity .15s;
+}
+.task-item:hover .icon-btn, .task-item:focus-within .icon-btn { opacity: 1; }
+.icon-btn:hover { background: var(--border); color: var(--text); }
+.icon-btn.del:hover { background: var(--danger-soft); color: var(--danger-text); }
+@media (hover: none) { .icon-btn { opacity: 1; } }
+
+/* ---------- 子任务 ---------- */
+.subtasks { border-top: 1px dashed var(--border); margin-top: 8px; padding-top: 8px; }
+.subtask { display: flex; align-items: center; gap: 8px; padding: 3px 0; }
+.subtask-title { font-size: 13px; flex: 1; min-width: 0; word-break: break-word; }
+.subtask.done .subtask-title { color: var(--muted); text-decoration: line-through; }
+.subtask .icon-btn { opacity: 1; font-size: 12px; padding: 2px 5px; }
+.subtask-add {
+  width: 100%; margin-top: 4px; padding: 7px 10px; font-size: 13px;
+  border: 1px dashed var(--border); border-radius: 8px; background: transparent; outline: none; color: var(--text);
+}
+.subtask-add:focus { border-color: var(--accent); }
+
+/* ---------- 编辑态 ---------- */
+.task-edit { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
+
+/* ---------- 统计视图 ---------- */
+.stats-view { display: flex; flex-direction: column; gap: 12px; }
+.stat-card { padding: 16px; }
+.stat-card h3 { margin: 0 0 12px; font-size: 13px; color: var(--muted); font-weight: 700; letter-spacing: 1px; }
+.trend { display: flex; align-items: flex-end; gap: 5px; height: 130px; }
+.trend-col { flex: 1; display: flex; flex-direction: column; justify-content: flex-end; height: 100%; min-width: 0; }
+.trend-bar {
+  background: linear-gradient(180deg, var(--accent-bright), var(--accent-2));
+  border-radius: 4px 4px 0 0; min-height: 3px;
+  display: flex; align-items: flex-start; justify-content: center; position: relative;
+  box-shadow: 0 0 12px color-mix(in srgb, var(--accent) 30%, transparent);
+}
+.trend-bar i { font-style: normal; font-size: 10px; color: var(--text); transform: translateY(-16px); }
+.trend-label { font-size: 9px; color: var(--muted); text-align: center; margin-top: 4px; white-space: nowrap; overflow: hidden; }
+.dist-row { display: flex; align-items: center; gap: 10px; margin-bottom: 10px; }
+.dist-row:last-child { margin-bottom: 0; }
+.dist-name { font-size: 12px; width: 60px; flex-shrink: 0; }
+.dist-track { flex: 1; height: 8px; background: var(--border); border-radius: 999px; overflow: hidden; }
+.dist-bar { height: 100%; border-radius: 999px; }
+.dist-bar.p-high { background: linear-gradient(90deg, #f43f5e, #fb7185); }
+.dist-bar.p-medium { background: linear-gradient(90deg, #f59e0b, #fbbf24); }
+.dist-bar.p-low { background: linear-gradient(90deg, #22d3ee, #818cf8); }
+.dist-num { font-size: 12px; width: 30px; text-align: right; flex-shrink: 0; color: var(--muted); }
+.tag-cloud { display: flex; gap: 8px; flex-wrap: wrap; }
+.stats-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px; }
+.stat { background: color-mix(in srgb, var(--accent) 7%, transparent); border-radius: 10px; padding: 10px 4px; text-align: center; border: 1px solid var(--border); }
+.stat b { display: block; font-size: 20px; line-height: 1.3; }
+.stat span { font-size: 11px; color: var(--muted); }
+
+/* ---------- 空状态 / 页脚 ---------- */
+.empty { text-align: center; color: var(--muted); padding: 40px 0; font-size: 14px; }
+.footer { text-align: center; color: var(--muted); font-size: 12px; margin-top: 16px; letter-spacing: .5px; }
+
+/* ---------- 登录界面 ---------- */
+.auth-wrap { min-height: 100vh; display: flex; align-items: center; justify-content: center; padding: calc(16px + env(safe-area-inset-top)) 16px calc(16px + env(safe-area-inset-bottom)); }
+.auth-card { width: 100%; max-width: 380px; padding: 32px 28px; text-align: center; }
+.auth-card .logo { margin-bottom: 4px; }
+.auth-sub { color: var(--muted); font-size: 14px; margin: 0 0 24px; }
+.auth-card form { display: flex; flex-direction: column; gap: 10px; text-align: left; }
+.auth-buttons { display: flex; flex-direction: column; gap: 8px; margin-top: 4px; }
+.error { color: var(--danger-text); font-size: 13px; margin: 0; }
+.notice { color: var(--ok); font-size: 13px; margin: 0; }
+
+/* ---------- 个人信息面板 ---------- */
+.profile-mask { position: fixed; inset: 0; background: rgba(2,6,23,.55); backdrop-filter: blur(2px); z-index: 40; animation: fade .2s; }
+.profile-panel {
+  position: fixed; top: 0; right: 0; height: 100%; width: min(380px, 92vw);
+  background: var(--surface-solid); border-left: 1px solid var(--border);
+  box-shadow: var(--shadow-lg); z-index: 41; overflow-y: auto;
+  padding: calc(20px + env(safe-area-inset-top)) 20px calc(24px + env(safe-area-inset-bottom));
+  animation: slideIn .25s ease;
+}
+@keyframes slideIn { from { transform: translateX(40px); opacity: 0; } }
+@keyframes fade { from { opacity: 0; } }
+.profile-head { position: relative; text-align: center; padding-bottom: 18px; border-bottom: 1px solid var(--border); margin-bottom: 18px; }
+.avatar {
+  width: 64px; height: 64px; border-radius: 50%; margin: 0 auto 10px;
+  background: linear-gradient(135deg, #22d3ee, #6366f1); color: #fff;
+  font-size: 28px; font-weight: 700; display: flex; align-items: center; justify-content: center;
+  box-shadow: 0 0 24px color-mix(in srgb, #22d3ee 40%, transparent);
+}
+.profile-email { font-weight: 700; word-break: break-all; }
+.profile-sub { font-size: 12px; color: var(--muted); margin-top: 2px; }
+.profile-close { position: absolute; top: -8px; right: -8px; opacity: 1; font-size: 15px; }
+.profile-section { margin-bottom: 22px; }
+.profile-section h3 { font-size: 13px; color: var(--muted); margin: 0 0 8px; font-weight: 700; letter-spacing: 1px; }
+.profile-action {
+  display: block; width: 100%; text-align: left; background: transparent;
+  border: 1px solid var(--border); border-radius: 10px; padding: 10px 12px;
+  font-size: 14px; color: var(--text); margin-bottom: 8px; transition: all .15s;
+}
+.profile-action:hover { border-color: var(--accent); color: var(--accent); }
+.profile-action.danger { color: var(--danger-text); }
+.profile-action.danger:hover { background: var(--danger-soft); border-color: var(--danger); }
+.pwd-form { display: flex; flex-direction: column; gap: 8px; margin: 8px 0 12px; }
+.profile-version { text-align: center; font-size: 11px; color: var(--muted); margin-top: 26px; letter-spacing: 1px; }
+
+/* ---------- Toast ---------- */
+.toast {
+  position: fixed; left: 50%; bottom: 28px; transform: translateX(-50%);
+  background: linear-gradient(120deg, rgba(8,145,178,.95), rgba(99,102,241,.95));
+  color: #fff; font-size: 13px; font-weight: 600; padding: 9px 18px;
+  border-radius: 999px; box-shadow: 0 8px 30px rgba(2,6,23,.4); z-index: 99;
+  max-width: 86vw; text-align: center;
+}
+
+@media (max-width: 560px) {
+  .wrap { padding-top: 16px; }
+  .logo { font-size: 21px; }
+  .toolbar { justify-content: center; }
+  .stats-grid { grid-template-columns: repeat(2, 1fr); }
+}
+</style>
+</head>
+<body>
+<div id="app" v-cloak>
+<n-config-provider :theme="naiveTheme" :theme-overrides="naiveOverrides" style="min-height:100vh">
+
+  <!-- ===== 云同步模式：未登录 → 登录/注册界面 ===== -->
+  <div v-if="isCloud && !user" class="auth-wrap">
+    <div class="auth-card glass">
+      <h1 class="logo">✅ 待办清单</h1>
+      <p class="auth-sub">登录后，多设备数据实时同步</p>
+      <form @submit.prevent="submitAuth">
+        <n-input v-model:value="authForm.email" placeholder="邮箱" type="email" required ></n-input>
+        <n-input v-model:value="authForm.password" type="password" show-password-on="click"
+                 placeholder="密码（至少 6 位）" required ></n-input>
+        <p v-if="authError" class="error">{{ authError }}</p>
+        <p v-if="authNotice" class="notice">{{ authNotice }}</p>
+        <div class="auth-buttons">
+          <n-button type="primary" block attr-type="submit" :loading="authBusy">
+            {{ authMode === 'login' ? '登 录' : '注 册' }}
+          </n-button>
+          <n-button quaternary block @click="toggleAuthMode">
+            {{ authMode === 'login' ? '没有账号？点此注册' : '已有账号？点此登录' }}
+          </n-button>
+        </div>
+      </form>
+    </div>
+  </div>
+
+  <!-- ===== 主界面 ===== -->
+  <div v-else class="wrap">
+    <header class="header">
+      <div class="header-left">
+        <h1 class="logo">✅ 待办清单</h1>
+        <span class="badge" :class="isCloud ? 'badge-cloud' : ''">{{ isCloud ? '☁ 云同步' : '本地模式' }}</span>
+      </div>
+      <div class="header-right">
+        <span v-if="isCloud" class="sync-dot" :class="syncClass" :title="syncTitle">{{ syncLabel }}</span>
+        <span v-if="user" class="user-email">{{ user.email }}</span>
+        <button type="button" class="btn ghost small" @click="showProfile = true" title="个人信息">👤 个人</button>
+      </div>
+    </header>
+
+    <!-- 视图切换 -->
+    <nav class="view-nav">
+      <button type="button" :class="{ active: view === 'today' }" @click="view = 'today'">☀️ 今天</button>
+      <button type="button" :class="{ active: view === 'all' }" @click="view = 'all'">📋 全部</button>
+      <button type="button" :class="{ active: view === 'stats' }" @click="view = 'stats'">📊 统计</button>
+      <button v-if="canNotify && notifPerm === 'default'" type="button" class="notif-btn" @click="requestNotif" title="开启浏览器提醒通知">🔔 开启提醒</button>
+      <span v-else-if="notifPerm === 'granted'" class="notif-btn granted" style="margin-left:auto;font-size:13px;font-weight:600;">🔔 提醒已开启</span>
+    </nav>
+
+    <!-- 添加任务 -->
+    <form class="add-form glass" @submit.prevent="addTask">
+      <n-input v-model:value="newTask.title" class="title-input" placeholder="要做什么？（回车即可添加）"
+               maxlength="200" @keydown.enter.prevent="addTask" ></n-input>
+      <div v-if="showMore" class="more-row">
+        <n-date-picker v-model:formatted-value="newTask.remindAt" type="datetime"
+                       value-format="yyyy-MM-dd HH:mm" format="MM-dd HH:mm" clearable
+                       placeholder="提醒时间" style="width:170px" ></n-date-picker>
+        <n-select v-model:value="newTask.repeat" :options="repeatOptions" style="width:120px" ></n-select>
+        <n-input v-model:value="newTask.tagsText" placeholder="标签（逗号分隔，如：工作, 紧急）" maxlength="60" style="flex:1" ></n-input>
+      </div>
+      <n-select v-model:value="newTask.priority" :options="priorityOptions" style="width:104px" ></n-select>
+      <n-date-picker v-model:formatted-value="newTask.dueDate" type="date"
+                     value-format="yyyy-MM-dd" format="yyyy-MM-dd" clearable
+                     placeholder="截止日期" style="width:140px" ></n-date-picker>
+      <n-button quaternary size="small" @click="showMore = !showMore">
+        {{ showMore ? '收起 ⌃' : '更多 ⌄' }}
+      </n-button>
+      <n-button type="primary" attr-type="submit">添加</n-button>
+    </form>
+
+    <!-- 今日摘要 -->
+    <div v-if="view === 'today' && (tasks.length)" class="today-summary glass">
+      <span v-if="overdueTasks.length">🔴 逾期 <b>{{ overdueTasks.length }}</b></span>
+      <span>📅 今天到期 <b>{{ dueTodayTasks.length }}</b></span>
+      <span v-if="todayDoneCount">✅ 今天已完成 <b>{{ todayDoneCount }}</b></span>
+    </div>
+
+    <!-- 工具栏（全部视图） -->
+    <div v-if="view === 'all' && tasks.length" class="toolbar">
+      <div class="filters glass">
+        <button v-for="f in filterDefs" :key="f.key" type="button"
+                :class="{ active: filter === f.key }" @click="filter = f.key">
+          {{ f.label }} {{ f.count }}
+        </button>
+      </div>
+      <div class="toolbar-right">
+        <n-select v-model:value="sortBy" :options="sortOptions" size="small" style="width:124px" ></n-select>
+        <label class="toggle-all">
+          <n-checkbox size="small" :checked="allDone" @update:checked="toggleAll" ></n-checkbox> 全选
+        </label>
+        <n-button v-if="doneCount" quaternary type="error" size="tiny" @click="clearCompleted">
+          清除已完成 ({{ doneCount }})
+        </n-button>
+      </div>
+    </div>
+
+    <!-- 标签筛选（全部视图） -->
+    <div v-if="view === 'all' && allTags.length" class="tag-filters">
+      <button v-for="[g, n] in allTags" :key="g" type="button"
+              :class="{ active: tagFilter === g }" @click="setTagFilter(g)">#{{ g }} {{ n }}</button>
+      <button v-if="tagFilter" type="button" @click="tagFilter = ''">✕ 清除标签筛选</button>
+    </div>
+
+    <!-- 离线 / 待同步横幅 -->
+    <div v-if="isCloud && (!online || pendingCount)" class="banner warn">
+      <span>{{ !online ? '⚠ 当前离线，更改已暂存本地，联网后自动同步' : `⏳ 有 ${pendingCount} 项更改等待同步` }}</span>
+      <n-button v-if="online && pendingCount" size="tiny" @click="flushQueue">立即同步</n-button>
+    </div>
+
+    <!-- 列表 / 加载 / 空状态 / 统计 -->
+    <div v-if="loading" class="empty">正在加载任务…</div>
+
+    <div v-else-if="view === 'stats'" class="stats-view">
+      <div class="stat-card glass">
+        <h3>📈 最近 14 天完成趋势</h3>
+        <div class="trend">
+          <div v-for="d in trend14" :key="d.date" class="trend-col">
+            <div class="trend-bar" :style="{ height: (d.count / maxTrend * 100) + '%' }">
+              <i v-if="d.count">{{ d.count }}</i>
+            </div>
+            <span class="trend-label">{{ d.label }}</span>
+          </div>
+        </div>
+      </div>
+      <div class="stat-card glass">
+        <h3>🎯 优先级分布</h3>
+        <div v-for="p in priorityStatsList" :key="p.key" class="dist-row">
+          <span class="dist-name">{{ p.label }}</span>
+          <div class="dist-track"><div class="dist-bar" :class="'p-' + p.key" :style="{ width: p.pct + '%' }"></div></div>
+          <span class="dist-num">{{ p.count }}</span>
+        </div>
+      </div>
+      <div class="stat-card glass" v-if="allTags.length">
+        <h3>🏷 标签分布</h3>
+        <div class="tag-cloud">
+          <span v-for="[g, n] in allTags" :key="g" class="tag-chip">#{{ g }} × {{ n }}</span>
+        </div>
+      </div>
+      <div class="stat-card glass">
+        <h3>✨ 总览</h3>
+        <div class="stats-grid">
+          <div class="stat"><b>{{ tasks.length }}</b><span>总任务</span></div>
+          <div class="stat"><b>{{ remaining }}</b><span>未完成</span></div>
+          <div class="stat"><b>{{ doneCount }}</b><span>已完成</span></div>
+          <div class="stat"><b>{{ completionRate }}%</b><span>完成率</span></div>
+        </div>
+      </div>
+    </div>
+
+    <ul v-else-if="viewList.length" class="task-list">
+      <li v-for="task in viewList" :key="task.id" class="task-item"
+          :class="{ done: task.completed, editing: editingId === task.id, 'overdue-top': isOverdue(task) }">
+
+        <!-- 查看态 -->
+        <div v-if="editingId !== task.id" class="task-view">
+          <n-checkbox :checked="task.completed" @update:checked="toggleTask(task)" style="margin-top:3px" ></n-checkbox>
+          <div class="task-main" @dblclick="startEdit(task)">
+            <div class="task-title">{{ task.title }}</div>
+            <div class="task-meta">
+              <span class="priority-tag" :class="'p-' + (task.priority || 'medium')">{{ priorityLabel(task.priority) }}</span>
+              <span v-if="task.due_date" class="due" :class="dueClass(task)">{{ dueLabel(task) }}</span>
+              <span v-if="task.repeat" class="repeat-ico" :title="'重复任务：' + repeatLabel(task.repeat)">🔁 {{ repeatLabel(task.repeat) }}</span>
+              <span v-if="task.remind_at" class="due soon" title="提醒时间">🔔 {{ fmtRemind(task.remind_at) }}</span>
+              <span v-for="g in (task.tags || [])" :key="g" class="tag-chip clickable" @click.stop="setTagFilter(g)">#{{ g }}</span>
+              <button type="button" class="subtask-chip"
+                      :class="{ open: expanded[task.id] }" @click.stop="toggleExpand(task.id)"
+                      :title="task.subtasks && task.subtasks.length
+                        ? '子任务 ' + doneSubCount(task) + '/' + task.subtasks.length : '添加子任务'">
+                {{ task.subtasks && task.subtasks.length
+                   ? '☑ ' + doneSubCount(task) + '/' + task.subtasks.length
+                   : '＋ 子任务' }}
+              </button>
+            </div>
+          </div>
+          <button type="button" class="icon-btn edit" title="编辑" @click="startEdit(task)">✏️</button>
+          <button type="button" class="icon-btn del" title="删除" @click="removeTask(task)">✕</button>
+        </div>
+
+        <!-- 子任务区 -->
+        <div v-if="editingId !== task.id && expanded[task.id]" class="subtasks">
+          <div v-for="sub in task.subtasks" :key="sub.id" class="subtask" :class="{ done: sub.done }">
+            <n-checkbox size="small" :checked="sub.done" @update:checked="toggleSubtask(task, sub)" ></n-checkbox>
+            <span class="subtask-title">{{ sub.title }}</span>
+            <button type="button" class="icon-btn del" title="删除子任务" @click="removeSubtask(task, sub)">✕</button>
+          </div>
+          <input v-model="subtaskDraft[task.id]" class="subtask-add" placeholder="+ 添加子任务，回车保存"
+                 maxlength="100" @keydown.enter.prevent="addSubtask(task)">
+        </div>
+
+        <!-- 编辑态 -->
+        <form v-else-if="editingId === task.id" class="task-edit" @submit.prevent="saveEdit" @keydown.esc="cancelEdit">
+          <n-input v-model:value="editTask.title" placeholder="任务标题" maxlength="200" style="flex:1 1 150px" ></n-input>
+          <n-select v-model:value="editTask.priority" :options="priorityOptions" size="small" style="width:96px" ></n-select>
+          <n-date-picker v-model:formatted-value="editTask.due_date" type="date" size="small"
+                         value-format="yyyy-MM-dd" format="yyyy-MM-dd" clearable
+                         placeholder="截止" style="width:132px" ></n-date-picker>
+          <n-date-picker v-model:formatted-value="editTask.remind_at" type="datetime" size="small"
+                         value-format="yyyy-MM-dd HH:mm" format="MM-dd HH:mm" clearable
+                         placeholder="提醒" style="width:156px" ></n-date-picker>
+          <n-select v-model:value="editTask.repeat" :options="repeatOptions" size="small" style="width:104px" ></n-select>
+          <n-input v-model:value="editTask.tagsText" placeholder="标签（逗号分隔）" maxlength="60" size="small" style="flex:1 1 130px" ></n-input>
+          <n-button type="primary" size="small" attr-type="submit">保存</n-button>
+          <n-button size="small" quaternary @click="cancelEdit">取消</n-button>
+        </form>
+      </li>
+    </ul>
+
+    <div v-else class="empty">{{ viewEmptyText }}</div>
+
+    <footer class="footer" v-if="tasks.length && view !== 'stats'">
+      {{ remaining }} 项未完成 · 共 {{ tasks.length }} 项{{ isCloud ? ' · 已同步至云端' : '' }}
+    </footer>
+  </div>
+
+  <!-- ===== 个人信息侧边面板 ===== -->
+  <template v-if="showProfile">
+    <div class="profile-mask" @click="closeProfile"></div>
+    <aside class="profile-panel" aria-label="个人信息">
+      <button type="button" class="icon-btn profile-close" @click="closeProfile" title="关闭">✕</button>
+
+      <div class="profile-head">
+        <div class="avatar">{{ avatarChar }}</div>
+        <div class="profile-email">{{ user ? user.email : '本地模式' }}</div>
+        <div class="profile-sub">{{ user ? '注册于 ' + memberSince : '数据仅保存在当前浏览器' }}</div>
+      </div>
+
+      <div class="profile-section">
+        <h3>任务统计</h3>
+        <div class="stats-grid">
+          <div class="stat"><b>{{ tasks.length }}</b><span>总任务</span></div>
+          <div class="stat"><b>{{ remaining }}</b><span>未完成</span></div>
+          <div class="stat"><b>{{ doneCount }}</b><span>已完成</span></div>
+          <div class="stat"><b>{{ completionRate }}%</b><span>完成率</span></div>
+        </div>
+      </div>
+
+      <div v-if="isCloud && user" class="profile-section">
+        <h3>账号</h3>
+        <button type="button" class="profile-action" @click="showPwdForm = !showPwdForm; pwdMsg = null">🔑 修改密码</button>
+        <form v-if="showPwdForm" class="pwd-form" @submit.prevent="changePassword">
+          <n-input v-model:value="pwdForm.newPwd" type="password" show-password-on="click"
+                   placeholder="新密码（至少 6 位）" ></n-input>
+          <n-input v-model:value="pwdForm.confirm" type="password" show-password-on="click"
+                   placeholder="再输入一次新密码" ></n-input>
+          <p v-if="pwdMsg" :class="pwdMsg.ok ? 'notice' : 'error'">{{ pwdMsg.text }}</p>
+          <n-button type="primary" size="small" attr-type="submit">保存新密码</n-button>
+        </form>
+        <button type="button" class="profile-action" @click="logout">🚪 退出登录</button>
+      </div>
+
+      <div class="profile-section">
+        <h3>数据</h3>
+        <button type="button" class="profile-action" @click="exportTasks">📦 导出全部任务（JSON 备份）</button>
+        <button type="button" class="profile-action danger" @click="confirmClearAll">
+          {{ clearArmed ? '⚠ 再点一次确认清空（3 秒内）' : '🗑 清空全部任务' }}
+        </button>
+      </div>
+
+      <p class="profile-version">待办清单 v4 · {{ isCloud ? '云同步模式' : '本地模式' }}</p>
+    </aside>
+  </template>
+
+  <!-- Toast 轻提示 -->
+  <div v-if="toast" class="toast">{{ toast }}</div>
+
+</n-config-provider>
+</div>
