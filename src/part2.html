@@ -6,6 +6,7 @@
 const CONFIG = {
   SUPABASE_URL: 'https://abummrfdirxxzeqpxfdc.supabase.co',
   SUPABASE_ANON_KEY: 'sb_publishable_JBjTBRGsDqysNPbXSyZ14w_BVPTHHea',
+  VAPID_PUBLIC_KEY: 'BN48qfBEI-7Rz7oyLJSwgToi5pbTtyA6eNjYidmNkp2w5qxkedDCwISse4iwIE2WfpBNE7DWDVTL-cy3nixPa4k', // Web Push 公钥（私钥只存在服务端环境变量）
 };
 
 /* ---------------- 工具函数 ---------------- */
@@ -77,8 +78,10 @@ const app = Vue.createApp({
       toast: '',
       sb: null,
       channel: null,
-      // 提醒通知
+      // 提醒通知 / 离线推送
       notifPerm: (typeof Notification !== 'undefined') ? Notification.permission : 'denied',
+      pushOn: false,
+      pushBusy: false,
       // UI（Naive UI 主题 + 外观三档 + 主题色）
       uiDark: false,
       appearance: 'auto', // auto | light | dark
@@ -1290,6 +1293,86 @@ const app = Vue.createApp({
       this.closeProfile();
     },
 
+    /* ---------------- 离线推送（Web Push）---------------- */
+    urlBase64ToUint8Array(b64) {
+      const padding = '='.repeat((4 - (b64.length % 4)) % 4);
+      const base64 = (b64 + padding).replace(/-/g, '+').replace(/_/g, '/');
+      const raw = atob(base64);
+      return Uint8Array.from([...raw].map((c) => c.charCodeAt(0)));
+    },
+
+    async enablePush() {
+      if (!this.isCloud || !this.user) { this.showToast('离线推送需要登录账号（云同步模式）'); return; }
+      if (!('serviceWorker' in navigator) || !('PushManager' in window)) {
+        this.showToast('当前浏览器不支持离线推送'); return;
+      }
+      this.pushBusy = true;
+      try {
+        let perm = Notification.permission;
+        if (perm === 'default') perm = await Notification.requestPermission();
+        if (perm !== 'granted') { this.notifPerm = perm; this.showToast('通知权限被拒绝，请在浏览器设置中允许后重试'); return; }
+        this.notifPerm = perm;
+        const reg = await navigator.serviceWorker.ready;
+        let sub = await reg.pushManager.getSubscription();
+        if (!sub) {
+          sub = await reg.pushManager.subscribe({
+            userVisibleOnly: true,
+            applicationServerKey: this.urlBase64ToUint8Array(CONFIG.VAPID_PUBLIC_KEY),
+          });
+        }
+        const { error } = await this.sb.from('push_subscriptions').upsert({
+          endpoint: sub.endpoint,
+          sub: sub.toJSON(),
+          user_id: this.user.id,
+        });
+        if (error) throw error;
+        this.pushOn = true;
+        this.showToast('✅ 离线推送已开启：应用关着也能收到提醒');
+      } catch (e) {
+        this.showToast('开启失败：' + ((e && e.message) || e));
+      } finally {
+        this.pushBusy = false;
+      }
+    },
+
+    async checkPushState() {
+      if (!this.isCloud || !('serviceWorker' in navigator) || !('PushManager' in window)) return;
+      try {
+        const reg = await navigator.serviceWorker.ready;
+        const sub = await reg.pushManager.getSubscription();
+        this.pushOn = !!(sub && Notification.permission === 'granted');
+      } catch (e) {}
+    },
+
+    async testPush() {
+      if (!this.pushOn) { this.showToast('请先开启离线推送'); return; }
+      const now = new Date();
+      const d = new Date(now.getTime() + 90000); // 1.5 分钟后触发
+      const p = n => String(n).padStart(2, '0');
+      const local = `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}`;
+      const task = {
+        id: uuid(),
+        title: '🔔 离线推送通道测试',
+        completed: false,
+        priority: 'medium',
+        due_date: null,
+        remind_at: this.parseLocalDateTime(local),
+        repeat: null,
+        tags: [],
+        subtasks: [],
+        image: null,
+        list_id: this.currentListId,
+        sort_order: Date.now(),
+        created_at: now.toISOString(),
+        updated_at: now.toISOString(),
+        completed_at: null,
+        deleted_at: null,
+      };
+      this.tasks.unshift(task);
+      if (this.isCloud && this.user) this.cloudMutate('upsert', task);
+      this.showToast('已创建 1.5 分钟后提醒的测试任务，关掉应用等通知 🔔');
+    },
+
     /* ---------------- 到期提醒 ---------------- */
     requestNotif() {
       Notification.requestPermission().then(p => {
@@ -1416,6 +1499,7 @@ const app = Vue.createApp({
       await this.loadLists();
       await this.loadTasks();
       this.subscribeRealtime();
+      this.checkPushState();
     },
 
     async logout() {

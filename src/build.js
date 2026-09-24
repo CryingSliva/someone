@@ -27,6 +27,15 @@ const swVersion = String(Date.now());
 const sw = fs.readFileSync(src('sw.js'), 'utf8').replace('__SW_VERSION__', swVersion);
 fs.writeFileSync(path.join(dist, 'sw.js'), sw);
 
+// 4. Netlify 定时推送函数（esbuild 打包 → dist/netlify/functions/）
+require('child_process').execSync(
+  'npx esbuild src/functions/push-reminders.js --bundle --platform=node --format=esm ' +
+  '--external:crypto --external:https --external:http --external:zlib --external:url --external:bufferutil --external:utf-8-validate ' +
+  '--banner:js="import { createRequire } from \'module\'; const require = createRequire(import.meta.url);" ' +
+  '--outfile=dist/netlify/functions/push-reminders.mjs --log-level=error',
+  { cwd: path.join(__dirname, '..'), stdio: 'inherit' }
+);
+
 // 4. 图标（若 dist/icons 缺失则重新生成）
 const needIcons = ['icon-192.png', 'icon-512.png', 'maskable-192.png', 'maskable-512.png', 'apple-touch-icon.png']
   .some((f) => !fs.existsSync(path.join(dist, 'icons', f)));

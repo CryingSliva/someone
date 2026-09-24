@@ -11,8 +11,11 @@
   "license": "ISC",
   "type": "commonjs",
   "devDependencies": {
+    "@netlify/functions": "^6.0.0",
     "archiver": "^7.0.1",
+    "esbuild": "^0.28.2",
     "sharp": "^0.35.4",
-    "terser": "^5.51.2"
+    "terser": "^5.51.2",
+    "web-push": "^3.6.7"
   }
 }

@@ -20,3 +20,8 @@ Thumbs.db
 
 # ZCode 会话文件
 .zcode/
+
+# 推送密钥（公钥已内联应用，私钥/服务密钥绝不提交）
+.vapid_private
+.vapid_public
+.supabase_service_key

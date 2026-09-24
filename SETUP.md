@@ -100,6 +100,37 @@ const CONFIG = {
 
 ---
 
+## ⬆️ v7 升级 SQL（离线推送）
+
+v7 新增 Web Push 离线推送（应用关闭也能收到提醒）。需要一张订阅表和推送标记字段：
+
+```sql
+alter table public.tasks add column if not exists push_sent_at timestamptz;
+
+create table if not exists public.push_subscriptions (
+  id uuid primary key default gen_random_uuid(),
+  user_id uuid not null references auth.users (id) on delete cascade,
+  endpoint text not null unique,
+  sub jsonb not null,
+  created_at timestamptz not null default now()
+);
+alter table public.push_subscriptions enable row level security;
+drop policy if exists "own subs" on public.push_subscriptions;
+create policy "own subs" on public.push_subscriptions
+  for all using (auth.uid() = user_id) with check (auth.uid() = user_id);
+```
+
+另外需要**一次性**配置（我方代管）：
+
+1. `.vapid_public` / `.vapid_private`：Web Push 密钥对（`npx web-push generate-vapid-keys` 生成）
+2. `.supabase_service_key`：Supabase → Settings → API → **secret key**（`sb_secret_` 开头），存为项目根目录同名文件
+3. 运行 `node src/setup-push-env.js` 把三者写入 Netlify 环境变量，再 `node src/deploy.js` 部署
+
+推送服务端是 `src/functions/push-reminders.js`（Netlify 定时函数，每分钟扫描到期提醒并推送），
+随 `node src/build.js` 自动打包进 `dist/netlify/functions/`。用户在应用「个人面板 → 离线推送」一键开启。
+
+---
+
 ## ⬆️ v6 升级 SQL（回收站 / 多清单 / 手动排序）
 
 v6 新增回收站（软删除）、多清单、手动排序，云端需要三个字段和一张清单表。

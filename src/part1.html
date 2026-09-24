@@ -782,6 +782,15 @@ html[data-accent='amber'] { --accent:#f59e0b; --accent-bright:#fbbf24; --accent-
         <div class="profile-sub">{{ user ? user.email + ' · 注册于 ' + memberSince : '数据仅保存在当前浏览器' }}</div>
       </div>
 
+      <div v-if="isCloud && user" class="profile-section">
+        <h3>离线推送</h3>
+        <p class="trash-note" style="margin:0 0 8px">
+          {{ pushOn ? '✅ 本设备已开启：应用关闭后仍可收到任务提醒' : '开启后，即使应用没打开，到点也会推送到这台设备' }}
+        </p>
+        <n-button v-if="!pushOn" type="primary" size="small" :loading="pushBusy" @click="enablePush">🔔 开启离线推送</n-button>
+        <n-button v-else size="small" quaternary @click="testPush">发送测试推送（1.5 分钟后）</n-button>
+      </div>
+
       <div class="profile-section">
         <h3>昵称</h3>
         <form class="nick-form" @submit.prevent="saveNickname">
