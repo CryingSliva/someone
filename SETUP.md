@@ -100,6 +100,35 @@ const CONFIG = {
 
 ---
 
+## ⬆️ v5 升级 SQL（启用云端截图存储）
+
+v5 新增截图待办功能，云端模式需要一个图片存储桶。在 Supabase → **SQL Editor** 粘贴运行：
+
+```sql
+-- 任务表加截图字段
+alter table public.tasks add column if not exists image text;
+
+-- 截图存储桶（公开读、用户只能读写自己文件夹）
+insert into storage.buckets (id, name, public)
+values ('todo_images', 'todo_images', true)
+on conflict (id) do nothing;
+
+drop policy if exists "own images" on storage.objects;
+create policy "own images" on storage.objects
+  for all to authenticated
+  using (bucket_id = 'todo_images' and (storage.foldername(name))[1] = auth.uid()::text)
+  with check (bucket_id = 'todo_images' and (storage.foldername(name))[1] = auth.uid()::text);
+
+drop policy if exists "public read images" on storage.objects;
+create policy "public read images" on storage.objects
+  for select using (bucket_id = 'todo_images');
+```
+
+> 不运行也不影响使用：截图会以内嵌方式兜底存储（任务行较大、加载稍慢）；
+> 头像、昵称、统计跳转等功能不依赖此 SQL。
+
+---
+
 ## ⬆️ v3 升级 SQL（已启用云同步的老用户必做）
 
 v3 新增了子任务、标签、提醒、重复任务、完成时间统计功能，云端数据库需要加几个字段。

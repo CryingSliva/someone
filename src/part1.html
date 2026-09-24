@@ -200,6 +200,29 @@ input, select { font-family: inherit; }
 .priority-tag.p-high { color: var(--danger-text); background: var(--danger-soft); }
 .priority-tag.p-medium { color: var(--warn-text); background: var(--warn-soft); }
 .priority-tag.p-low { color: var(--accent); background: color-mix(in srgb, var(--accent) 12%, transparent); }
+.stat.clickable { cursor: pointer; transition: all .15s; }
+.stat.clickable:hover { border-color: var(--accent); transform: translateY(-2px); }
+.dist-row.clickable { cursor: pointer; padding: 4px 6px; margin: 0 -6px 8px; border-radius: 8px; transition: background .15s; }
+.dist-row.clickable:hover { background: color-mix(in srgb, var(--accent) 9%, transparent); }
+.task-image { position: relative; margin-top: 8px; }
+.task-image img { max-width: 100%; max-height: 220px; border-radius: 10px; border: 1px solid var(--border); cursor: zoom-in; display: block; }
+.img-del {
+  position: absolute; top: 6px; right: 6px; border: none; border-radius: 50%;
+  width: 24px; height: 24px; background: rgba(2,6,23,.65); color: #fff;
+  cursor: pointer; opacity: 0; transition: opacity .15s; font-size: 12px;
+}
+.task-image:hover .img-del { opacity: 1; }
+@media (hover: none) { .img-del { opacity: 1; } }
+.lightbox {
+  position: fixed; inset: 0; z-index: 60; background: rgba(2,6,23,.87);
+  display: flex; align-items: center; justify-content: center; cursor: zoom-out; animation: fade .15s;
+}
+.lightbox img { max-width: 94vw; max-height: 94vh; border-radius: 8px; }
+.avatar { cursor: pointer; transition: box-shadow .2s; }
+.avatar:hover { box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 45%, transparent), 0 0 24px color-mix(in srgb, var(--accent) 40%, transparent); }
+.avatar img { width: 100%; height: 100%; object-fit: cover; border-radius: 50%; }
+.avatar-hint { display: block; font-size: 11px; color: var(--muted); margin-top: 4px; }
+.nick-form { display: flex; gap: 8px; }
 .due { font-size: 12px; color: var(--muted); }
 .due.soon { color: var(--warn-text); font-weight: 600; }
 .due.overdue { color: var(--danger-text); font-weight: 700; }
@@ -386,7 +409,7 @@ input, select { font-family: inherit; }
 
     <!-- 添加任务 -->
     <form class="add-form glass" @submit.prevent="addTask">
-      <n-input v-model:value="newTask.title" class="title-input" placeholder="要做什么？（回车即可添加）"
+      <n-input v-model:value="newTask.title" class="title-input" placeholder="要做什么？（回车添加 · Ctrl+V 可粘贴截图）"
                maxlength="200" @keydown.enter.prevent="addTask" ></n-input>
       <div v-if="showMore" class="more-row">
         <n-date-picker v-model:formatted-value="newTask.remindAt" type="datetime"
@@ -438,6 +461,12 @@ input, select { font-family: inherit; }
       <button v-if="tagFilter" type="button" @click="tagFilter = ''">✕ 清除标签筛选</button>
     </div>
 
+    <!-- 优先级筛选（全部视图，来自统计页跳转） -->
+    <div v-if="view === 'all' && priorityFilter" class="tag-filters">
+      <button type="button" class="active">{{ priorityLabel(priorityFilter) }} {{ priorityCount }}</button>
+      <button type="button" @click="priorityFilter = ''">✕ 清除优先级筛选</button>
+    </div>
+
     <!-- 离线 / 待同步横幅 -->
     <div v-if="isCloud && (!online || pendingCount)" class="banner warn">
       <span>{{ !online ? '⚠ 当前离线，更改已暂存本地，联网后自动同步' : `⏳ 有 ${pendingCount} 项更改等待同步` }}</span>
@@ -460,25 +489,26 @@ input, select { font-family: inherit; }
         </div>
       </div>
       <div class="stat-card glass">
-        <h3>🎯 优先级分布</h3>
-        <div v-for="p in priorityStatsList" :key="p.key" class="dist-row">
+        <h3>🎯 优先级分布（点击筛选）</h3>
+        <div v-for="p in priorityStatsList" :key="p.key" class="dist-row clickable"
+             @click="setPriorityFilter(p.key)" :title="'查看' + p.label + '任务'">
           <span class="dist-name">{{ p.label }}</span>
           <div class="dist-track"><div class="dist-bar" :class="'p-' + p.key" :style="{ width: p.pct + '%' }"></div></div>
           <span class="dist-num">{{ p.count }}</span>
         </div>
       </div>
       <div class="stat-card glass" v-if="allTags.length">
-        <h3>🏷 标签分布</h3>
+        <h3>🏷 标签分布（点击筛选）</h3>
         <div class="tag-cloud">
-          <span v-for="[g, n] in allTags" :key="g" class="tag-chip">#{{ g }} × {{ n }}</span>
+          <span v-for="[g, n] in allTags" :key="g" class="tag-chip clickable" @click="setTagFilter(g)">#{{ g }} × {{ n }}</span>
         </div>
       </div>
       <div class="stat-card glass">
-        <h3>✨ 总览</h3>
+        <h3>✨ 总览（点击跳转）</h3>
         <div class="stats-grid">
-          <div class="stat"><b>{{ tasks.length }}</b><span>总任务</span></div>
-          <div class="stat"><b>{{ remaining }}</b><span>未完成</span></div>
-          <div class="stat"><b>{{ doneCount }}</b><span>已完成</span></div>
+          <div class="stat clickable" @click="jumpFilter('all')" title="查看全部任务"><b>{{ tasks.length }}</b><span>总任务</span></div>
+          <div class="stat clickable" @click="jumpFilter('active')" title="查看未完成任务"><b>{{ remaining }}</b><span>未完成</span></div>
+          <div class="stat clickable" @click="jumpFilter('done')" title="查看已完成任务"><b>{{ doneCount }}</b><span>已完成</span></div>
           <div class="stat"><b>{{ completionRate }}%</b><span>完成率</span></div>
         </div>
       </div>
@@ -511,6 +541,12 @@ input, select { font-family: inherit; }
           </div>
           <button type="button" class="icon-btn edit" title="编辑" @click="startEdit(task)">✏️</button>
           <button type="button" class="icon-btn del" title="删除" @click="removeTask(task)">✕</button>
+        </div>
+
+        <!-- 截图（查看态） -->
+        <div v-if="editingId !== task.id && task.image" class="task-image">
+          <img :src="task.image" alt="任务截图" @click="openImage(task.image)">
+          <button type="button" class="img-del" title="移除截图" @click.stop="removeImage(task)">✕</button>
         </div>
 
         <!-- 子任务区 -->
@@ -556,9 +592,22 @@ input, select { font-family: inherit; }
       <button type="button" class="icon-btn profile-close" @click="closeProfile" title="关闭">✕</button>
 
       <div class="profile-head">
-        <div class="avatar">{{ avatarChar }}</div>
-        <div class="profile-email">{{ user ? user.email : '本地模式' }}</div>
-        <div class="profile-sub">{{ user ? '注册于 ' + memberSince : '数据仅保存在当前浏览器' }}</div>
+        <div class="avatar" @click="pickAvatar" title="点击更换头像">
+          <img v-if="avatarUrl" :src="avatarUrl" alt="头像">
+          <span v-else>{{ avatarChar }}</span>
+        </div>
+        <span class="avatar-hint">点击头像更换</span>
+        <input ref="avatarInput" type="file" accept="image/*" style="display:none" @change="onAvatarPicked">
+        <div class="profile-email">{{ displayName }}</div>
+        <div class="profile-sub">{{ user ? user.email + ' · 注册于 ' + memberSince : '数据仅保存在当前浏览器' }}</div>
+      </div>
+
+      <div class="profile-section">
+        <h3>昵称</h3>
+        <form class="nick-form" @submit.prevent="saveNickname">
+          <n-input v-model:value="nicknameDraft" placeholder="给自己起个名字（20 字以内）" maxlength="20"></n-input>
+          <n-button type="primary" size="small" attr-type="submit">保存</n-button>
+        </form>
       </div>
 
       <div class="profile-section">
@@ -593,9 +642,14 @@ input, select { font-family: inherit; }
         </button>
       </div>
 
-      <p class="profile-version">待办清单 v4 · {{ isCloud ? '云同步模式' : '本地模式' }}</p>
+      <p class="profile-version">待办清单 v5 · {{ isCloud ? '云同步模式' : '本地模式' }}</p>
     </aside>
   </template>
+
+  <!-- 截图预览灯箱 -->
+  <div v-if="imagePreview" class="lightbox" @click="imagePreview = null" title="点击关闭">
+    <img :src="imagePreview" alt="截图预览">
+  </div>
 
   <!-- Toast 轻提示 -->
   <div v-if="toast" class="toast">{{ toast }}</div>

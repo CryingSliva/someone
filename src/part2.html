@@ -97,6 +97,12 @@ const app = Vue.createApp({
         { label: '按截止日期', value: 'due' },
         { label: '按创建时间', value: 'created' },
       ],
+      // 个人资料（昵称/头像）与筛选
+      nickname: '',
+      nicknameDraft: '',
+      avatarUrl: '',
+      priorityFilter: '',
+      imagePreview: null,
       // 个人信息面板
       showProfile: false,
       showPwdForm: false,
@@ -112,6 +118,13 @@ const app = Vue.createApp({
     },
     naiveTheme() {
       return this.uiDark ? this.naiveDark : null;
+    },
+    displayName() {
+      return this.nickname || (this.user ? this.user.email : '本地模式');
+    },
+    priorityCount() {
+      if (!this.priorityFilter) return 0;
+      return this.tasks.filter(t => (t.priority || 'medium') === this.priorityFilter).length;
     },
     canNotify() { return typeof Notification !== 'undefined'; },
     remaining() { return this.tasks.filter(t => !t.completed).length; },
@@ -151,6 +164,7 @@ const app = Vue.createApp({
       let list = this.tasks.filter(t =>
         this.filter === 'all' ? true : this.filter === 'active' ? !t.completed : t.completed);
       if (this.tagFilter) list = list.filter(t => (t.tags || []).includes(this.tagFilter));
+      if (this.priorityFilter) list = list.filter(t => (t.priority || 'medium') === this.priorityFilter);
       return list.slice().sort((a, b) => this.sortCmp(a, b));
     },
     viewEmptyText() {
@@ -214,7 +228,8 @@ const app = Vue.createApp({
     },
     /* 个人信息面板 */
     avatarChar() {
-      return this.user && this.user.email ? this.user.email.charAt(0).toUpperCase() : '✓';
+      const src = this.nickname || (this.user && this.user.email) || '';
+      return src ? src.charAt(0).toUpperCase() : '✓';
     },    memberSince() {
       if (!this.user || !this.user.created_at) return '';
       return new Date(this.user.created_at)
@@ -246,6 +261,7 @@ const app = Vue.createApp({
       this.sb.auth.onAuthStateChange((evt, session) => {
         if (evt === 'SIGNED_OUT') this.onSignedOut();
         else if (evt === 'SIGNED_IN' && session && !this.user) this.onSignedIn(session.user);
+        else if (evt === 'USER_UPDATED' && session) this.user = session.user;
         else if (evt === 'TOKEN_REFRESHED' && session) this.user = session.user;
       });
       setInterval(() => { if (navigator.onLine) this.flushQueue(); }, 30000);
@@ -258,6 +274,18 @@ const app = Vue.createApp({
     matchMedia('(prefers-color-scheme: dark)').addEventListener('change', (e) => {
       this.applySystemDark(e.matches);
     });
+
+    // 全局粘贴截图 → 生成图片待办
+    document.addEventListener('paste', (e) => this.onPaste(e));
+
+    // 本地模式的昵称/头像
+    if (!this.isCloud) {
+      try {
+        this.nickname = localStorage.getItem('todo.nickname') || '';
+        this.avatarUrl = localStorage.getItem('todo.avatar') || '';
+        this.nicknameDraft = this.nickname;
+      } catch (e) {}
+    }
 
     // 到期提醒：启动后 5 秒查一次，之后每分钟检查
     setTimeout(() => this.checkReminders(), 5000);
@@ -472,6 +500,145 @@ const app = Vue.createApp({
       if (this.isCloud && this.user) this.cloudMutate('upsert', task);
     },
 
+    /* ---------------- 截图待办 / 头像 ---------------- */
+    onPaste(e) {
+      const t = e.target;
+      // 输入框内的粘贴不拦截（正常贴文字）
+      if (t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.isContentEditable)) return;
+      const items = (e.clipboardData && e.clipboardData.items) || [];
+      for (const it of items) {
+        if (it.kind === 'file' && it.type && it.type.startsWith('image/')) {
+          const file = it.getAsFile();
+          if (file) { e.preventDefault(); this.addImageTask(file); }
+          return;
+        }
+      }
+    },
+
+    compressImage(file, maxDim = 1280, quality = 0.82) {
+      return new Promise((resolve, reject) => {
+        const url = URL.createObjectURL(file);
+        const img = new Image();
+        img.onload = () => {
+          const scale = Math.min(1, maxDim / Math.max(img.width, img.height));
+          const w = Math.max(1, Math.round(img.width * scale));
+          const h = Math.max(1, Math.round(img.height * scale));
+          const canvas = document.createElement('canvas');
+          canvas.width = w; canvas.height = h;
+          canvas.getContext('2d').drawImage(img, 0, 0, w, h);
+          const dataUrl = canvas.toDataURL('image/jpeg', quality);
+          canvas.toBlob((blob) => {
+            URL.revokeObjectURL(url);
+            resolve({ dataUrl, blob: blob || null });
+          }, 'image/jpeg', quality);
+        };
+        img.onerror = () => { URL.revokeObjectURL(url); reject(new Error('图片读取失败')); };
+        img.src = url;
+      });
+    },
+
+    async addImageTask(file) {
+      try {
+        this.showToast('📷 正在处理截图…');
+        const { dataUrl, blob } = await this.compressImage(file);
+        const now = new Date().toISOString();
+        const task = {
+          id: uuid(),
+          title: '截图任务',
+          completed: false,
+          priority: 'medium',
+          due_date: null,
+          remind_at: null,
+          repeat: null,
+          tags: ['截图'],
+          subtasks: [],
+          image: dataUrl,
+          created_at: now,
+          updated_at: now,
+          completed_at: null,
+        };
+        // 云端模式：优先上传到 Storage，失败则用 dataUrl 兜底（仍可显示）
+        if (this.isCloud && this.user) {
+          try {
+            const path = this.user.id + '/' + task.id + '.jpg';
+            const { error } = await this.sb.storage.from('todo_images')
+              .upload(path, blob, { contentType: 'image/jpeg', upsert: true });
+            if (!error) {
+              const { data } = this.sb.storage.from('todo_images').getPublicUrl(path);
+              task.image = data.publicUrl;
+            }
+          } catch (e) { /* Storage 未配置等情况：保留 dataUrl */ }
+        }
+        this.tasks.unshift(task);
+        if (this.isCloud && this.user) this.cloudMutate('upsert', task);
+        this.showToast('📷 截图已添加为待办');
+      } catch (e) {
+        this.showToast('截图处理失败：' + ((e && e.message) || e));
+      }
+    },
+
+    removeImage(task) {
+      task.image = null;
+      task.updated_at = new Date().toISOString();
+      if (this.isCloud && this.user) this.cloudMutate('upsert', task);
+      this.showToast('已移除截图');
+    },
+
+    openImage(url) { this.imagePreview = url; },
+
+    pickAvatar() {
+      const input = this.$refs.avatarInput;
+      if (input) input.click();
+    },
+
+    async onAvatarPicked(e) {
+      const file = e.target.files && e.target.files[0];
+      e.target.value = '';
+      if (!file) return;
+      if (!/^image\//.test(file.type)) { this.showToast('请选择图片文件'); return; }
+      try {
+        const { dataUrl } = await this.compressImage(file, 256, 0.85);
+        this.avatarUrl = dataUrl;
+        if (this.isCloud && this.user) {
+          const { data, error } = await this.sb.auth.updateUser({ data: { avatar_url: dataUrl } });
+          if (error) throw error;
+          if (data && data.user) this.user = data.user;
+        } else {
+          try { localStorage.setItem('todo.avatar', dataUrl); } catch (err) {}
+        }
+        this.showToast('✅ 头像已更新');
+      } catch (e) {
+        this.showToast('头像保存失败：' + ((e && e.message) || e));
+      }
+    },
+
+    async saveNickname() {
+      const name = this.nicknameDraft.trim().slice(0, 20);
+      if (!name) { this.showToast('昵称不能为空'); return; }
+      this.nickname = name;
+      if (this.isCloud && this.user) {
+        try {
+          const { data, error } = await this.sb.auth.updateUser({ data: { nickname: name } });
+          if (error) throw error;
+          if (data && data.user) this.user = data.user;
+        } catch (e) { this.showToast('昵称保存失败：' + ((e && e.message) || e)); return; }
+      } else {
+        try { localStorage.setItem('todo.nickname', name); } catch (e) {}
+      }
+      this.showToast('✅ 昵称已保存');
+    },
+
+    /* ---------------- 统计跳转 / 筛选 ---------------- */
+    jumpFilter(key) {
+      this.view = 'all';
+      this.filter = key;
+    },
+
+    setPriorityFilter(p) {
+      this.priorityFilter = this.priorityFilter === p ? '' : p;
+      this.view = 'all';
+    },
+
     /* ---------------- 深色模式 ---------------- */
     applySystemDark(dark) {
       this.uiDark = dark;
@@ -667,6 +834,11 @@ const app = Vue.createApp({
     async onSignedIn(user) {
       this.user = user;
       this.pendingCount = this.readQueue().length;
+      // 云端个人资料（昵称/头像存在用户元数据里）
+      const meta = (user && user.user_metadata) || {};
+      this.nickname = meta.nickname || '';
+      this.avatarUrl = meta.avatar_url || '';
+      this.nicknameDraft = this.nickname;
       await this.loadTasks();
       this.subscribeRealtime();
     },
@@ -688,6 +860,12 @@ const app = Vue.createApp({
       this.pendingCount = 0;
       this.authForm.password = '';
       this.authMode = 'login';
+      // 恢复本地模式的个人资料
+      try {
+        this.nickname = localStorage.getItem('todo.nickname') || '';
+        this.avatarUrl = localStorage.getItem('todo.avatar') || '';
+        this.nicknameDraft = this.nickname;
+      } catch (e) {}
     },
 
     /* ---------------- 云端数据加载 / 实时同步 ---------------- */
@@ -758,6 +936,7 @@ const app = Vue.createApp({
         repeat: task.repeat || null,
         tags: task.tags || [],
         subtasks: task.subtasks || [],
+        image: task.image || null,
         created_at: task.created_at,
         updated_at: task.updated_at,
         completed_at: task.completed_at || null,
