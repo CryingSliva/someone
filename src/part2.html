@@ -12,6 +12,13 @@ const CONFIG = {
 const PRIORITY_LABELS = { high: '高优先级', medium: '中优先级', low: '低优先级' };
 const PRIORITY_WEIGHT = { high: 0, medium: 1, low: 2 };
 const REPEAT_LABELS = { daily: '每天', weekly: '每周', monthly: '每月' };
+const ACCENTS = {
+  cyan:   { label: '青', primary: '#22d3ee', hover: '#67e8f9', pressed: '#06b6d4', accent2: '#6366f1', glow: 'rgba(34,211,238,.10)', glow2: 'rgba(99,102,241,.13)' },
+  violet: { label: '紫', primary: '#8b5cf6', hover: '#a78bfa', pressed: '#7c3aed', accent2: '#22d3ee', glow: 'rgba(139,92,246,.12)', glow2: 'rgba(34,211,238,.10)' },
+  rose:   { label: '粉', primary: '#f43f5e', hover: '#fb7185', pressed: '#e11d48', accent2: '#f59e0b', glow: 'rgba(244,63,94,.10)', glow2: 'rgba(245,158,11,.12)' },
+  green:  { label: '绿', primary: '#10b981', hover: '#34d399', pressed: '#059669', accent2: '#22d3ee', glow: 'rgba(16,185,129,.11)', glow2: 'rgba(34,211,238,.10)' },
+  amber:  { label: '橙', primary: '#f59e0b', hover: '#fbbf24', pressed: '#d97706', accent2: '#6366f1', glow: 'rgba(245,158,11,.11)', glow2: 'rgba(99,102,241,.12)' },
+};
 
 function uuid() {
   if (window.crypto && crypto.randomUUID) {
@@ -41,15 +48,18 @@ function daysBetween(from, to) { // from/to: 'YYYY-MM-DD'
 const app = Vue.createApp({
   data() {
     return {
-      tasks: [],
-      view: 'today',            // today | all | stats
+      tasks: [],            // 有效任务（未删除）
+      trashTasks: [],       // 回收站任务
+      view: 'today',        // today | all | calendar | stats | trash
       filter: 'all',
       sortBy: 'smart',
       tagFilter: '',
+      priorityFilter: '',
+      search: '',
       newTask: { title: '', priority: 'medium', dueDate: null, remindAt: null, tagsText: '', repeat: '' },
       showMore: false,
-      expanded: {},             // 子任务展开状态 { taskId: bool }
-      subtaskDraft: {},         // 子任务输入 { taskId: string }
+      expanded: {},
+      subtaskDraft: {},
       editingId: null,
       editTask: { id: null, title: '', priority: 'medium', due_date: null, remind_at: null, tagsText: '', repeat: '' },
       // 账号 / 认证
@@ -69,18 +79,11 @@ const app = Vue.createApp({
       channel: null,
       // 提醒通知
       notifPerm: (typeof Notification !== 'undefined') ? Notification.permission : 'denied',
-      // UI（Naive UI 主题 + 深色跟随系统）—— markRaw 防止响应式代理破坏 Naive 内部对象
+      // UI（Naive UI 主题 + 外观三档 + 主题色）
       uiDark: false,
+      appearance: 'auto', // auto | light | dark
+      accent: 'cyan',
       naiveDark: window.Vue.markRaw(window.naive ? window.naive.darkTheme : null),
-      naiveOverrides: window.Vue.markRaw({
-        common: {
-          primaryColor: '#22d3ee',
-          primaryColorHover: '#67e8f9',
-          primaryColorPressed: '#06b6d4',
-          primaryColorSuppl: '#22d3ee',
-          borderRadius: '10px',
-        },
-      }),
       priorityOptions: [
         { label: '🔴 高', value: 'high' },
         { label: '🟡 中', value: 'medium' },
@@ -96,18 +99,38 @@ const app = Vue.createApp({
         { label: '智能排序', value: 'smart' },
         { label: '按截止日期', value: 'due' },
         { label: '按创建时间', value: 'created' },
+        { label: '手动排序', value: 'manual' },
       ],
-      // 个人资料（昵称/头像）与筛选
+      // 个人资料（昵称/头像）
       nickname: '',
       nicknameDraft: '',
       avatarUrl: '',
-      priorityFilter: '',
       imagePreview: null,
-      // 个人信息面板
+      // 个人信息面板（v5 遗漏补回）
       showProfile: false,
       showPwdForm: false,
       pwdForm: { newPwd: '', confirm: '' },
       pwdMsg: null,
+      // 打卡 / 番茄钟 / 周报
+      streak: 0,
+      pomo: { taskId: null, title: '', total: 25 * 60, left: 25 * 60, running: false },
+      listening: false,
+      // AI 解析
+      aiKey: '',
+      aiBusy: false,
+      // 模板
+      templates: [],
+      showTplMenu: false,
+      // 多清单
+      lists: [],            // 自定义清单 [{id, name}]
+      currentListId: null,  // null = 默认清单
+      newListName: '',
+      showNewListInput: false,
+      // 日历
+      calCursor: null,      // 当前月（Date 毫秒）
+      calSelected: null,    // 选中日 'YYYY-MM-DD'
+      // 拖拽
+      dragId: null,
       clearArmed: false,
     };
   },
@@ -116,19 +139,26 @@ const app = Vue.createApp({
     isCloud() {
       return !!(CONFIG.SUPABASE_URL && CONFIG.SUPABASE_ANON_KEY && window.supabase);
     },
-    naiveTheme() {
-      return this.uiDark ? this.naiveDark : null;
+    canNotify() { return typeof Notification !== 'undefined'; },
+    naiveTheme() { return this.uiDark ? this.naiveDark : null; },
+    naiveOverrides() {
+      const a = ACCENTS[this.accent] || ACCENTS.cyan;
+      return window.Vue.markRaw({
+        common: {
+          primaryColor: a.primary, primaryColorHover: a.hover,
+          primaryColorPressed: a.pressed, primaryColorSuppl: a.primary,
+          borderRadius: '10px',
+        },
+      });
     },
-    displayName() {
-      return this.nickname || (this.user ? this.user.email : '本地模式');
-    },
+    displayName() { return this.nickname || (this.user ? this.user.email : '本地模式'); },
+    activeTasks() { return this.tasks.filter(t => (t.list_id || null) === this.currentListId); },
     priorityCount() {
       if (!this.priorityFilter) return 0;
       return this.tasks.filter(t => (t.priority || 'medium') === this.priorityFilter).length;
     },
-    canNotify() { return typeof Notification !== 'undefined'; },
-    remaining() { return this.tasks.filter(t => !t.completed).length; },
-    doneCount() { return this.tasks.length - this.remaining; },
+    remaining() { return this.activeTasks.filter(t => !t.completed).length; },
+    doneCount() { return this.activeTasks.length - this.remaining; },
     allDone() { return this.tasks.length > 0 && this.doneCount === this.tasks.length; },
     filterDefs() {
       return [
@@ -139,41 +169,49 @@ const app = Vue.createApp({
     },
     allTags() {
       const map = new Map();
-      this.tasks.forEach(t => (t.tags || []).forEach(g => map.set(g, (map.get(g) || 0) + 1)));
+      this.activeTasks.forEach(t => (t.tags || []).forEach(g => map.set(g, (map.get(g) || 0) + 1)));
       return [...map.entries()].sort((a, b) => b[1] - a[1]);
     },
     /* 今日视图 */
     overdueTasks() {
       const today = todayStr();
-      return this.tasks
+      return this.activeTasks
         .filter(t => !t.completed && t.due_date && t.due_date < today)
         .sort((a, b) => a.due_date.localeCompare(b.due_date));
     },
     dueTodayTasks() {
       const today = todayStr();
-      return this.tasks.filter(t => !t.completed && t.due_date === today)
+      return this.activeTasks.filter(t => !t.completed && t.due_date === today)
         .sort((a, b) => this.sortCmp(a, b));
     },
     todayDoneCount() {
       const today = todayStr();
-      return this.tasks.filter(t => t.completed && t.completed_at && localDateStr(t.completed_at) === today).length;
+      return this.activeTasks.filter(t => t.completed && t.completed_at && localDateStr(t.completed_at) === today).length;
     },
-    /* 列表（全部视图 / 今日视图共用渲染） */
+    /* 列表（全部视图） */
     viewList() {
       if (this.view === 'today') return [...this.overdueTasks, ...this.dueTodayTasks];
-      let list = this.tasks.filter(t =>
+      let list = this.activeTasks.filter(t =>
         this.filter === 'all' ? true : this.filter === 'active' ? !t.completed : t.completed);
       if (this.tagFilter) list = list.filter(t => (t.tags || []).includes(this.tagFilter));
       if (this.priorityFilter) list = list.filter(t => (t.priority || 'medium') === this.priorityFilter);
+      if (this.search) {
+        const q = this.search.toLowerCase();
+        list = list.filter(t =>
+          t.title.toLowerCase().includes(q) ||
+          (t.tags || []).some(g => g.toLowerCase().includes(q)) ||
+          (t.subtasks || []).some(s => s.title.toLowerCase().includes(q)));
+      }
       return list.slice().sort((a, b) => this.sortCmp(a, b));
     },
     viewEmptyText() {
       if (this.view === 'today') {
-        if (this.overdueTasks.length || this.dueTodayTasks.length) return '';
-        return this.tasks.length
-          ? '今天没有到期任务 🎉 到「全部」视图看看其他安排吧'
-          : '暂无任务，添加第一个吧 ✨';
+        if (this.tasks.length && !this.overdueTasks.length && !this.dueTodayTasks.length)
+          return '今天没有到期任务 🎉 到「全部」视图看看其他安排吧';
+        return this.tasks.length ? '' : '暂无任务，添加第一个吧 ✨';
       }
+      if (this.view === 'trash') return this.trashTasks.length ? '' : '回收站是空的 ♻️';
+      if (this.search) return `没有匹配「${this.search}」的任务`;
       if (!this.tasks.length) return '暂无任务，添加第一个吧 ✨';
       if (this.filter === 'active') return '没有未完成的任务，太棒了 🎉';
       return '还没有已完成的任务';
@@ -190,7 +228,7 @@ const app = Vue.createApp({
           count: 0, isToday: i === 0,
         });
       }
-      this.tasks.forEach(t => {
+      this.activeTasks.forEach(t => {
         if (t.completed && t.completed_at) {
           const ds = localDateStr(t.completed_at);
           const hit = days.find(d => d.date === ds);
@@ -202,13 +240,60 @@ const app = Vue.createApp({
     maxTrend() { return Math.max(1, ...this.trend14.map(d => d.count)); },
     priorityStatsList() {
       const s = { high: 0, medium: 0, low: 0 };
-      this.tasks.forEach(t => { s[t.priority || 'medium']++; });
+      this.activeTasks.forEach(t => { s[t.priority || 'medium']++; });
       const total = Math.max(1, this.tasks.length);
       return [
         { key: 'high', label: '高优先级', count: s.high, pct: Math.round(s.high / total * 100) },
         { key: 'medium', label: '中优先级', count: s.medium, pct: Math.round(s.medium / total * 100) },
         { key: 'low', label: '低优先级', count: s.low, pct: Math.round(s.low / total * 100) },
       ];
+    },
+    /* 本周回顾 */
+    weeklySummary() {
+      const now = new Date();
+      const monday = new Date(now);
+      monday.setDate(now.getDate() - ((now.getDay() + 6) % 7));
+      monday.setHours(0, 0, 0, 0);
+      const inWeek = ts => { const t = new Date(ts).getTime(); return t >= monday.getTime(); };
+      const done = this.activeTasks.filter(t => t.completed && t.completed_at && inWeek(t.completed_at)).length;
+      const added = this.activeTasks.filter(t => inWeek(t.created_at)).length;
+      const overdue = this.overdueTasks.length;
+      const tagMap = new Map();
+      this.activeTasks.filter(t => t.completed && t.completed_at && inWeek(t.completed_at))
+        .forEach(t => (t.tags || []).forEach(g => tagMap.set(g, (tagMap.get(g) || 0) + 1)));
+      const topTags = [...tagMap.entries()].sort((a, b) => b[1] - a[1]).slice(0, 3).map(x => '#' + x[0]);
+      const minutes = this.focusSessions().reduce((s, x) => s + x.minutes, 0);
+      const p2 = n => String(n).padStart(2, '0');
+      const range = `${monday.getMonth() + 1}.${monday.getDate()} - ${now.getMonth() + 1}.${now.getDate()}`;
+      return { done, added, overdue, topTags, minutes, streak: this.streak, range };
+    },
+    /* 日历视图 */
+    calGrid() {
+      const cur = this.calCursor ? new Date(this.calCursor) : new Date();
+      const y = cur.getFullYear(), m = cur.getMonth();
+      const first = new Date(y, m, 1);
+      const startOffset = (first.getDay() + 6) % 7; // 周一开头
+      const days = [];
+      const p2 = n => String(n).padStart(2, '0');
+      const countByDate = {};
+      this.activeTasks.forEach(t => {
+        if (!t.due_date || t.completed) return;
+        countByDate[t.due_date] = (countByDate[t.due_date] || 0) + 1;
+      });
+      for (let i = 0; i < 42; i++) {
+        const d = new Date(y, m, 1 - startOffset + i);
+        const ds = `${d.getFullYear()}-${p2(d.getMonth() + 1)}-${p2(d.getDate())}`;
+        days.push({
+          date: ds, day: d.getDate(), inMonth: d.getMonth() === m,
+          isToday: ds === todayStr(), count: countByDate[ds] || 0,
+        });
+      }
+      return { title: `${y} 年 ${m + 1} 月`, days };
+    },
+    calDayTasks() {
+      if (!this.calSelected) return [];
+      return this.tasks.filter(t => t.due_date === this.calSelected)
+        .sort((a, b) => this.sortCmp(a, b));
     },
     emptyText() { return this.viewEmptyText; },
     syncLabel() {
@@ -223,14 +308,12 @@ const app = Vue.createApp({
       if (this.pendingCount) return 'pending';
       return 'ok';
     },
-    syncTitle() {
-      return this.isCloud ? '数据通过 Supabase 在你的设备间同步' : '';
-    },
-    /* 个人信息面板 */
+    syncTitle() { return this.isCloud ? '数据通过 Supabase 在你的设备间同步' : ''; },
     avatarChar() {
       const src = this.nickname || (this.user && this.user.email) || '';
       return src ? src.charAt(0).toUpperCase() : '✓';
-    },    memberSince() {
+    },
+    memberSince() {
       if (!this.user || !this.user.created_at) return '';
       return new Date(this.user.created_at)
         .toLocaleDateString('zh-CN', { year: 'numeric', month: 'long', day: 'numeric' });
@@ -238,11 +321,20 @@ const app = Vue.createApp({
     completionRate() {
       return this.tasks.length ? Math.round(this.doneCount / this.tasks.length * 100) : 0;
     },
+    listOptions() {
+      return [{ label: '📋 默认清单', value: '__default__' }]
+        .concat(this.lists.map(l => ({ label: '📁 ' + l.name, value: l.id })));
+    },
+    currentListValue: {
+      get() { return this.currentListId || '__default__'; },
+      set(v) { this.switchList(v === '__default__' ? null : v); },
+    },
   },
 
   watch: {
     tasks: {
       handler() {
+        this.calcStreak();
         if (this.isCloud && this.user) this.writeCache();
         else this.saveLocal();
       },
@@ -253,6 +345,26 @@ const app = Vue.createApp({
   async mounted() {
     window.addEventListener('online', () => { this.online = true; this.flushQueue(); });
     window.addEventListener('offline', () => { this.online = false; });
+
+    // 外观三档 + 主题色
+    try {
+      this.appearance = localStorage.getItem('todo.appearance') || 'auto';
+      this.accent = ACCENTS[localStorage.getItem('todo.accent')] ? localStorage.getItem('todo.accent') : 'cyan';
+    } catch (e) {}
+    this.applyAppearance();
+    matchMedia('(prefers-color-scheme: dark)').addEventListener('change', () => {
+      if (this.appearance === 'auto') this.applyAppearance();
+    });
+
+    // 全局粘贴截图 / 键盘快捷键
+    document.addEventListener('paste', (e) => this.onPaste(e));
+    document.addEventListener('keydown', (e) => this.onShortcut(e));
+
+    // 模板 / AI key
+    try {
+      this.templates = JSON.parse(localStorage.getItem('todo.templates') || '[]');
+      this.aiKey = localStorage.getItem('todo.aikey') || '';
+    } catch (e) {}
 
     if (this.isCloud) {
       this.sb = supabase.createClient(CONFIG.SUPABASE_URL, CONFIG.SUPABASE_ANON_KEY);
@@ -266,20 +378,7 @@ const app = Vue.createApp({
       });
       setInterval(() => { if (navigator.onLine) this.flushQueue(); }, 30000);
     } else {
-      this.tasks = this.readLocal();
-    }
-
-    // 深色模式跟随系统
-    this.applySystemDark(matchMedia('(prefers-color-scheme: dark)').matches);
-    matchMedia('(prefers-color-scheme: dark)').addEventListener('change', (e) => {
-      this.applySystemDark(e.matches);
-    });
-
-    // 全局粘贴截图 → 生成图片待办
-    document.addEventListener('paste', (e) => this.onPaste(e));
-
-    // 本地模式的昵称/头像
-    if (!this.isCloud) {
+      this.loadLocalAll();
       try {
         this.nickname = localStorage.getItem('todo.nickname') || '';
         this.avatarUrl = localStorage.getItem('todo.avatar') || '';
@@ -287,15 +386,70 @@ const app = Vue.createApp({
       } catch (e) {}
     }
 
+    // 回收站自动清理（30 天）
+    this.purgeOldTrash();
+
     // 到期提醒：启动后 5 秒查一次，之后每分钟检查
     setTimeout(() => this.checkReminders(), 5000);
     setInterval(() => this.checkReminders(), 60000);
   },
 
   methods: {
+    /* ---------------- 外观 / 主题色 ---------------- */
+    applyAppearance() {
+      const dark = this.appearance === 'dark' ||
+        (this.appearance === 'auto' && matchMedia('(prefers-color-scheme: dark)').matches);
+      this.uiDark = dark;
+      document.documentElement.classList.toggle('dark', dark);
+      const meta = document.querySelector('meta[name="theme-color"]');
+      if (meta) meta.content = dark ? '#05070f' : '#f4f6fb';
+    },
+    setAppearance(v) {
+      this.appearance = v;
+      try { localStorage.setItem('todo.appearance', v); } catch (e) {}
+      this.applyAppearance();
+    },
+    setAccent(a) {
+      this.accent = a;
+      try { localStorage.setItem('todo.accent', a); } catch (e) {}
+      document.documentElement.setAttribute('data-accent', a);
+      this.showToast('🎨 主题色已切换');
+    },
+
+    /* ---------------- 键盘快捷键 ---------------- */
+    onShortcut(e) {
+      const t = e.target;
+      const typing = t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.isContentEditable);
+      if (e.key === 'Escape') {
+        if (this.imagePreview) { this.imagePreview = null; return; }
+        if (this.showProfile) { this.closeProfile(); return; }
+        if (typing) t.blur();
+        return;
+      }
+      if (typing || e.ctrlKey || e.metaKey || e.altKey) return;
+      if (e.key === 'n' || e.key === 'N') {
+        e.preventDefault();
+        const el = document.querySelector('.add-form input');
+        if (el) { el.focus(); }
+      } else if (e.key === '/') {
+        e.preventDefault();
+        this.view = 'all';
+        this.$nextTick(() => {
+          const el = document.querySelector('.search-input input');
+          if (el) el.focus();
+        });
+      } else if (['1', '2', '3', '4'].includes(e.key)) {
+        const views = ['today', 'all', 'calendar', 'stats'];
+        this.view = views[+e.key - 1];
+      }
+    },
+
     /* ---------------- 排序 / 展示 ---------------- */
     sortCmp(a, b) {
       if (a.completed !== b.completed) return a.completed ? 1 : -1; // 未完成在前
+      const ao = a.sort_order != null ? a.sort_order : (a.created_at ? new Date(a.created_at).getTime() : 0);
+      const bo = b.sort_order != null ? b.sort_order : (b.created_at ? new Date(b.created_at).getTime() : 0);
+      if (this.sortBy === 'manual') return ao - bo;
       const createdCmp = (b.created_at || '').localeCompare(a.created_at || '');
       if (this.sortBy === 'created') return createdCmp;
       if (this.sortBy === 'due') {
@@ -361,6 +515,392 @@ const app = Vue.createApp({
       this._toastTimer = setTimeout(() => { this.toast = ''; }, 2600);
     },
 
+    /* ---------------- 打卡 streak ---------------- */
+    calcStreak() {
+      const days = new Set(this.activeTasks
+        .filter(t => t.completed && t.completed_at)
+        .map(t => localDateStr(t.completed_at)));
+      let streak = 0;
+      const d = new Date();
+      if (!days.has(localDateStr(d.toISOString()))) d.setDate(d.getDate() - 1); // 今天还没完成不打断
+      while (days.has(localDateStr(d.toISOString()))) { streak++; d.setDate(d.getDate() - 1); }
+      this.streak = streak;
+    },
+
+    /* ---------------- AI 自然语言解析（规则引擎 + 可选 LLM）---------------- */
+    parseNaturalLanguage(raw) {
+      let text = ' ' + raw + ' ';
+      const out = { title: raw, priority: null, dueDate: null, remindAt: null, tags: [], repeat: null };
+      const today = new Date();
+      const p2 = n => String(n).padStart(2, '0');
+      const fmt = d => `${d.getFullYear()}-${p2(d.getMonth() + 1)}-${p2(d.getDate())}`;
+      const addDays = n => { const d = new Date(today); d.setDate(d.getDate() + n); return d; };
+      let m;
+      // 优先级
+      if (/高优先|紧急|重要/.test(text)) out.priority = 'high';
+      else if (/低优先|不急/.test(text)) out.priority = 'low';
+      else if (/中优先/.test(text)) out.priority = 'medium';
+      text = text.replace(/(高|中|低)优先级?|紧急|重要|不急/g, ' ');
+      // 重复
+      if (/每天|每日/.test(text)) out.repeat = 'daily';
+      else if (/每周/.test(text)) out.repeat = 'weekly';
+      else if (/每月/.test(text)) out.repeat = 'monthly';
+      text = text.replace(/每天|每日|每周|每月/g, ' ');
+      // 日期
+      const weekdays = ['日', '一', '二', '三', '四', '五', '六'];
+      if (/今天|今晚/.test(text)) { out.dueDate = fmt(today); text = text.replace(/今天|今晚/g, ' '); }
+      else if (/明天/.test(text)) { out.dueDate = fmt(addDays(1)); text = text.replace(/明天/g, ' '); }
+      else if (/后天/.test(text)) { out.dueDate = fmt(addDays(2)); text = text.replace(/后天/g, ' '); }
+      else if ((m = text.match(/大后天/))) { out.dueDate = fmt(addDays(3)); text = text.replace(/大后天/g, ' '); }
+      else if ((m = text.match(/下?周([一二三四五六日天])/))) {
+        const idx = weekdays.indexOf(m[1] === '天' ? '日' : m[1]);
+        let delta = (idx - today.getDay() + 7) % 7;
+        if (m[0].startsWith('下')) delta += 7;
+        if (delta === 0) delta = 7;
+        out.dueDate = fmt(addDays(delta));
+        text = text.replace(m[0], ' ');
+      }
+      else if ((m = text.match(/(\d{1,2})月(\d{1,2})[日号]/))) {
+        const d = new Date(today.getFullYear(), +m[1] - 1, +m[2]);
+        if (d < today) d.setFullYear(d.getFullYear() + 1);
+        out.dueDate = fmt(d);
+        text = text.replace(m[0], ' ');
+      }
+      else if ((m = text.match(/(\d{1,3})[天日]后/))) { out.dueDate = fmt(addDays(+m[1])); text = text.replace(m[0], ' '); }
+      else if ((m = text.match(/(\d{4})-(\d{1,2})-(\d{1,2})/))) { out.dueDate = `${m[1]}-${p2(m[2])}-${p2(m[3])}`; text = text.replace(m[0], ' '); }
+      // 提醒时间（默认作用于到期日当天）
+      if ((m = text.match(/(上午|早上|中午|下午|晚上)?\s*(\d{1,2})[:：点时](\d{1,2})?分?/))) {
+        let h = +m[2]; const min = m[3] ? +m[3] : 0;
+        if ((m[1] === '下午' || m[1] === '晚上') && h < 12) h += 12;
+        if ((m[1] === '上午' || m[1] === '早上') && h === 12) h = 0;
+        const base = out.dueDate || fmt(today);
+        out.remindAt = `${base} ${p2(h)}:${p2(min)}`;
+        text = text.replace(/提醒我?|提醒/g, ' ').replace(m[0], ' ');
+      }
+      // 标签
+      const tags = [...text.matchAll(/#([^\s#,，、]+)/g)].map(x => x[1]);
+      if (tags.length) { out.tags = tags.slice(0, 3); text = text.replace(/#[^\s#,，、]+/g, ' '); }
+      out.title = text.replace(/\s{2,}/g, ' ').trim() || raw;
+      return out;
+    },
+
+    async smartParse() {
+      const raw = (this.newTask.title || '').trim();
+      if (!raw) { this.showToast('先输入内容再点 ✨ 解析'); return; }
+      let parsed;
+      if (this.aiKey) {
+        this.aiBusy = true;
+        try { parsed = await this.llmParse(raw); } catch (e) { parsed = null; }
+        this.aiBusy = false;
+      }
+      if (!parsed) parsed = this.parseNaturalLanguage(raw);
+      this.newTask.title = parsed.title;
+      if (parsed.priority) this.newTask.priority = parsed.priority;
+      if (parsed.dueDate) this.newTask.dueDate = parsed.dueDate;
+      if (parsed.remindAt) { this.newTask.remindAt = parsed.remindAt; this.showMore = true; }
+      if (parsed.repeat) { this.newTask.repeat = parsed.repeat; this.showMore = true; }
+      if (parsed.tags && parsed.tags.length) {
+        this.newTask.tagsText = parsed.tags.join(', ');
+        this.showMore = true;
+      }
+      const bits = [
+        parsed.dueDate ? '📅 ' + parsed.dueDate : '',
+        parsed.priority ? this.priorityLabel(parsed.priority) : '',
+        parsed.remindAt ? '🔔 ' + parsed.remindAt : '',
+        parsed.repeat ? '🔁 ' + this.repeatLabel(parsed.repeat) : '',
+      ].filter(Boolean);
+      this.showToast(bits.length ? '✨ 已识别：' + bits.join(' · ') : '✨ 已整理标题（没识别到日期/优先级）');
+    },
+
+    async llmParse(raw) {
+      const res = await fetch('https://open.bigmodel.cn/api/paas/v4/chat/completions', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${this.aiKey}` },
+        body: JSON.stringify({
+          model: 'glm-4-flash',
+          messages: [
+            { role: 'system', content: '你是待办清单解析器。把用户的话解析成 JSON：{"title":string,"priority":"high|medium|low|null","due_date":"YYYY-MM-DD|null","remind_at":"YYYY-MM-DD HH:mm|null","tags":[],"repeat":"daily|weekly|monthly|null"}。今天是' + todayStr() + '。只输出 JSON，不要多余文字。' },
+            { role: 'user', content: raw },
+          ],
+          temperature: 0.1,
+        }),
+      });
+      if (!res.ok) throw new Error('LLM ' + res.status);
+      const data = await res.json();
+      const json = JSON.parse((data.choices[0].message.content || '').replace(/```json|```/g, '').trim());
+      return {
+        title: json.title || raw,
+        priority: ['high', 'medium', 'low'].includes(json.priority) ? json.priority : null,
+        dueDate: /^\d{4}-\d{2}-\d{2}$/.test(json.due_date || '') ? json.due_date : null,
+        remindAt: /^\d{4}-\d{2}-\d{2} \d{2}:\d{2}$/.test(json.remind_at || '') ? json.remind_at : null,
+        tags: Array.isArray(json.tags) ? json.tags.filter(x => typeof x === 'string').slice(0, 3) : [],
+        repeat: ['daily', 'weekly', 'monthly'].includes(json.repeat) ? json.repeat : null,
+      };
+    },
+
+    saveAiKey() {
+      this.aiKey = (this.aiKey || '').trim();
+      try { localStorage.setItem('todo.aikey', this.aiKey); } catch (e) {}
+      this.showToast(this.aiKey ? '✅ AI Key 已保存（智谱 glm-4-flash）' : '已清空，使用内置规则解析');
+    },
+
+    /* ---------------- 语音输入 ---------------- */
+    toggleVoice() {
+      const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+      if (!SR) { this.showToast('当前浏览器不支持语音识别（推荐 Chrome/Edge）'); return; }
+      if (this._rec) { this._rec.stop(); return; }
+      const rec = new SR();
+      rec.lang = 'zh-CN';
+      rec.interimResults = false;
+      rec.onresult = (e) => {
+        const t = e.results[0][0].transcript;
+        this.newTask.title = t;
+        this.smartParse(); // 语音内容自动解析
+      };
+      rec.onend = () => { this.listening = false; this._rec = null; };
+      rec.onerror = () => { this.listening = false; this._rec = null; this.showToast('语音识别结束/失败'); };
+      this._rec = rec;
+      this.listening = true;
+      this.showToast('🎙 正在聆听…请说话');
+      rec.start();
+    },
+
+    /* ---------------- 番茄钟 ---------------- */
+    startPomo(task) {
+      this.stopPomo(true);
+      this.pomo = { taskId: task.id, title: task.title, total: 25 * 60, left: 25 * 60, running: true };
+      this._pomoTimer = setInterval(() => {
+        if (!this.pomo.running) return;
+        this.pomo.left--;
+        if (this.pomo.left <= 0) this.finishPomo();
+      }, 1000);
+      this.showToast('🍅 番茄钟开始：25 分钟专注');
+    },
+    togglePomoPause() { this.pomo.running = !this.pomo.running; },
+    stopPomo(silent) {
+      clearInterval(this._pomoTimer);
+      const wasRunning = !!this.pomo.taskId;
+      this.pomo = { taskId: null, title: '', total: 25 * 60, left: 25 * 60, running: false };
+      if (wasRunning && !silent) this.showToast('番茄钟已取消');
+    },
+    finishPomo() {
+      clearInterval(this._pomoTimer);
+      const sessions = this.focusSessions();
+      sessions.push({ task_title: this.pomo.title, minutes: 25, ended_at: new Date().toISOString() });
+      try { localStorage.setItem(this.storageKey('focus'), JSON.stringify(sessions.slice(-200))); } catch (e) {}
+      try { new Notification('🍅 番茄钟完成！', { body: '专注 25 分钟，休息一下吧' }); } catch (e) {}
+      this.showToast('🍅 专注 25 分钟完成，已记录！');
+      this.pomo = { taskId: null, title: '', total: 25 * 60, left: 25 * 60, running: false };
+    },
+    focusSessions() {
+      try { return JSON.parse(localStorage.getItem(this.storageKey('focus')) || '[]'); } catch (e) { return []; }
+    },
+    pomoClock() {
+      const m = Math.floor(this.pomo.left / 60), s = this.pomo.left % 60;
+      return `${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}`;
+    },
+    pomoPct() {
+      return Math.round((1 - this.pomo.left / this.pomo.total) * 100);
+    },
+
+    /* ---------------- 模板 ---------------- */
+    saveTemplateFromTask(task) {
+      const tpl = {
+        id: uuid(), name: task.title.slice(0, 20),
+        title: task.title, priority: task.priority || 'medium',
+        repeat: task.repeat || '', tagsText: (task.tags || []).join(', '),
+        subtasks: (task.subtasks || []).map(s => s.title),
+      };
+      this.templates.unshift(tpl);
+      try { localStorage.setItem('todo.templates', JSON.stringify(this.templates)); } catch (e) {}
+      this.showToast('📋 已存为模板：' + tpl.name);
+    },
+    applyTemplate(tpl) {
+      this.newTask = {
+        title: tpl.title, priority: tpl.priority || 'medium',
+        dueDate: null, remindAt: null, tagsText: tpl.tagsText || '', repeat: tpl.repeat || '',
+      };
+      this._pendingSubtasks = tpl.subtasks || [];
+      this.showTplMenu = false;
+      this.showToast('📋 模板已填入，回车添加');
+    },
+    deleteTemplate(id) {
+      this.templates = this.templates.filter(t => t.id !== id);
+      try { localStorage.setItem('todo.templates', JSON.stringify(this.templates)); } catch (e) {}
+    },
+
+    /* ---------------- 多清单 ---------------- */
+    async loadLists() {
+      if (this.isCloud && this.user) {
+        const { data, error } = await this.sb.from('lists').select('*').order('created_at');
+        if (!error) this.lists = (data || []).map(l => ({ id: l.id, name: l.name }));
+      } else {
+        try { this.lists = JSON.parse(localStorage.getItem('todo.lists') || '[]'); } catch (e) {}
+      }
+      try { this.currentListId = localStorage.getItem(this.storageKey('currentList')) || null; } catch (e) {}
+      if (this.currentListId && !this.lists.some(l => l.id === this.currentListId)) this.currentListId = null;
+    },
+    async createList() {
+      const name = this.newListName.trim().slice(0, 12);
+      if (!name) return;
+      let id = uuid();
+      if (this.isCloud && this.user) {
+        const { data, error } = await this.sb.from('lists').insert({ id, user_id: this.user.id, name }).select();
+        if (error) { this.showToast('创建失败：' + error.message); return; }
+      }
+      this.lists.push({ id, name });
+      try { localStorage.setItem('todo.lists', JSON.stringify(this.lists)); } catch (e) {}
+      this.newListName = '';
+      this.showNewListInput = false;
+      this.switchList(id);
+      this.showToast('📁 清单「' + name + '」已创建');
+    },
+    async switchList(id) {
+      this.currentListId = id;
+      try { localStorage.setItem(this.storageKey('currentList'), id || ''); } catch (e) {}
+      if (this.isCloud && this.user) await this.loadTasks();
+    },
+    async deleteCurrentList() {
+      if (!this.currentListId) return;
+      const list = this.lists.find(l => l.id === this.currentListId);
+      if (!list) return;
+      if (this._listDelArmed !== list.id) {
+        this._listDelArmed = list.id;
+        this.showToast('⚠ 再点一次删除清单「' + list.name + '」（任务移回默认清单）');
+        clearTimeout(this._listDelTimer);
+        this._listDelTimer = setTimeout(() => { this._listDelArmed = null; }, 3000);
+        return;
+      }
+      clearTimeout(this._listDelTimer);
+      this._listDelArmed = null;
+      const moved = this.tasks.filter(t => t.list_id === this.currentListId);
+      moved.forEach(t => { t.list_id = null; t.updated_at = new Date().toISOString(); });
+      this.tasks = [...this.tasks];
+      this.lists = this.lists.filter(l => l.id !== this.currentListId);
+      try { localStorage.setItem('todo.lists', JSON.stringify(this.lists)); } catch (e) {}
+      if (this.isCloud && this.user) {
+        moved.forEach(t => this.cloudMutate('upsert', t));
+        await this.sb.from('lists').delete().eq('id', this.currentListId).then(() => {}, () => {});
+      }
+      this.switchList(null);
+      this.showToast('清单已删除，' + moved.length + ' 项任务移回默认清单');
+    },
+
+    /* ---------------- 日历 ---------------- */
+    calPrevMonth() {
+      const d = this.calCursor ? new Date(this.calCursor) : new Date();
+      d.setMonth(d.getMonth() - 1);
+      this.calCursor = d.getTime();
+    },
+    calNextMonth() {
+      const d = this.calCursor ? new Date(this.calCursor) : new Date();
+      d.setMonth(d.getMonth() + 1);
+      this.calCursor = d.getTime();
+    },
+
+    /* ---------------- 本周回顾分享卡片 ---------------- */
+    buildWeeklyCard() {
+      const w = this.weeklySummary;
+      const canvas = document.createElement('canvas');
+      canvas.width = 900; canvas.height = 1200;
+      const ctx = canvas.getContext('2d');
+      const accent = ACCENTS[this.accent] || ACCENTS.cyan;
+      // 背景：深空渐变 + 网格
+      const bg = ctx.createLinearGradient(0, 0, 900, 1200);
+      bg.addColorStop(0, '#0b1226'); bg.addColorStop(1, '#05070f');
+      ctx.fillStyle = bg; ctx.fillRect(0, 0, 900, 1200);
+      ctx.strokeStyle = 'rgba(148,163,184,.08)'; ctx.lineWidth = 1;
+      for (let x = 0; x < 900; x += 45) { ctx.beginPath(); ctx.moveTo(x, 0); ctx.lineTo(x, 1200); ctx.stroke(); }
+      for (let y = 0; y < 1200; y += 45) { ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(900, y); ctx.stroke(); }
+      const glow = ctx.createRadialGradient(160, 120, 0, 160, 120, 420);
+      glow.addColorStop(0, accent.glow.replace(/[\d.]+\)$/, '.35)')); glow.addColorStop(1, 'transparent');
+      ctx.fillStyle = glow; ctx.fillRect(0, 0, 900, 700);
+      // 标题
+      ctx.fillStyle = '#fff'; ctx.font = 'bold 52px "Microsoft YaHei", sans-serif';
+      ctx.fillText('✅ 待办清单 · 本周回顾', 70, 130);
+      ctx.fillStyle = 'rgba(226,232,240,.55)'; ctx.font = '26px "Microsoft YaHei", sans-serif';
+      ctx.fillText(w.range, 70, 180);
+      // 大数字
+      const stats = [
+        [String(w.done), '完成任务', accent.primary],
+        [String(w.added), '新建任务', '#818cf8'],
+        [w.minutes ? String(w.minutes) + '′' : '—', '番茄专注', '#f59e0b'],
+        [w.streak ? w.streak + ' 天' : '—', '连续打卡', '#f97316'],
+      ];
+      stats.forEach(([num, label, color], i) => {
+        const x = 70 + (i % 2) * 400, y = 280 + Math.floor(i / 2) * 220;
+        ctx.fillStyle = 'rgba(255,255,255,.04)';
+        this.roundRect(ctx, x, y, 360, 180, 20); ctx.fill();
+        ctx.strokeStyle = 'rgba(148,163,184,.2)'; this.roundRect(ctx, x, y, 360, 180, 20); ctx.stroke();
+        ctx.fillStyle = color; ctx.font = 'bold 72px "Microsoft YaHei", sans-serif';
+        ctx.fillText(num, x + 30, y + 90);
+        ctx.fillStyle = 'rgba(226,232,240,.7)'; ctx.font = '26px "Microsoft YaHei", sans-serif';
+        ctx.fillText(label, x + 30, y + 140);
+      });
+      // 逾期与标签
+      ctx.fillStyle = w.overdue ? '#fb7185' : '#34d399';
+      ctx.font = '30px "Microsoft YaHei", sans-serif';
+      ctx.fillText(w.overdue ? `⚠ 还有 ${w.overdue} 项逾期未完成` : '🎉 本周无逾期任务', 70, 790);
+      ctx.fillStyle = 'rgba(226,232,240,.85)'; ctx.font = '28px "Microsoft YaHei", sans-serif';
+      ctx.fillText(w.topTags.length ? '高频标签：' + w.topTags.join(' · ') : '本周还没有标签', 70, 850);
+      // 底部
+      const grad = ctx.createLinearGradient(70, 0, 480, 0);
+      grad.addColorStop(0, accent.primary); grad.addColorStop(1, accent.accent2);
+      ctx.fillStyle = grad; ctx.font = 'bold 26px "Microsoft YaHei", sans-serif';
+      ctx.fillText('fishtodo.netlify.app', 70, 1130);
+      canvas.toBlob((blob) => {
+        const a = document.createElement('a');
+        a.href = URL.createObjectURL(blob);
+        a.download = 'todo-weekly-' + todayStr() + '.png';
+        a.click();
+        URL.revokeObjectURL(a.href);
+      }, 'image/png');
+      this.showToast('🖼 分享卡片已生成下载');
+    },
+    roundRect(ctx, x, y, w, h, r) {
+      ctx.beginPath();
+      ctx.moveTo(x + r, y);
+      ctx.arcTo(x + w, y, x + w, y + h, r);
+      ctx.arcTo(x + w, y + h, x, y + h, r);
+      ctx.arcTo(x, y + h, x, y, r);
+      ctx.arcTo(x, y, x + w, y, r);
+      ctx.closePath();
+    },
+
+    /* ---------------- 拖拽排序 ---------------- */
+    onDragStart(task, e) {
+      this.dragId = task.id;
+      if (e && e.dataTransfer) { e.dataTransfer.effectAllowed = 'move'; e.dataTransfer.setData('text/plain', task.id); }
+    },
+    onDragEnd() { this.dragId = null; },
+    onDropOn(target) {
+      const srcId = this.dragId;
+      this.dragId = null;
+      if (!srcId || srcId === target.id) return;
+      const manual = this.viewList; // 已按当前排序的列表
+      const ti = manual.findIndex(t => t.id === target.id);
+      const src = this.tasks.find(t => t.id === srcId);
+      if (!src || ti < 0) return;
+      const si = manual.findIndex(t => t.id === srcId);
+      const above = si < ti ? manual[ti - 1] : manual[ti];      // 插入位置前一项
+      const below = si < ti ? manual[ti] : manual[ti + 1];      // 插入位置后一项
+      const aOrd = above ? (above.sort_order != null ? above.sort_order : new Date(above.created_at).getTime()) : null;
+      const bOrd = below ? (below.sort_order != null ? below.sort_order : new Date(below.created_at).getTime()) : null;
+      let ord;
+      if (aOrd == null && bOrd != null) ord = bOrd - 1;
+      else if (bOrd == null && aOrd != null) ord = aOrd + 1;
+      else if (aOrd != null && bOrd != null) ord = (aOrd + bOrd) / 2;
+      else ord = Date.now();
+      src.sort_order = ord;
+      src.updated_at = new Date().toISOString();
+      // 数组内移动
+      const from = this.tasks.findIndex(t => t.id === srcId);
+      this.tasks.splice(from, 1);
+      const to = this.tasks.findIndex(t => t.id === target.id);
+      this.tasks.splice(si < ti ? to + 1 : to, 0, src);
+      if (this.isCloud && this.user) this.cloudMutate('upsert', src);
+    },
+
     /* ---------------- 本地增删改 ---------------- */
     addTask() {
       if (!this.newTask.title) return;
@@ -374,11 +914,16 @@ const app = Vue.createApp({
         remind_at: this.parseLocalDateTime(this.newTask.remindAt),
         repeat: this.newTask.repeat || null,
         tags: this.parseTags(this.newTask.tagsText),
-        subtasks: [],
+        subtasks: (this._pendingSubtasks || []).map(s => ({ id: uuid(), title: s, done: false })),
+        image: null,
+        list_id: this.currentListId,
+        sort_order: Date.now(),
         created_at: now,
         updated_at: now,
         completed_at: null,
+        deleted_at: null,
       };
+      this._pendingSubtasks = [];
       this.tasks.unshift(task);
       this.newTask = { title: '', priority: 'medium', dueDate: null, remindAt: null, tagsText: '', repeat: '' };
       this.showMore = false;
@@ -433,15 +978,50 @@ const app = Vue.createApp({
       return d.toISOString();
     },
 
+    /* 软删除 → 回收站（30 天可恢复） */
     removeTask(task) {
+      task.deleted_at = new Date().toISOString();
       this.tasks = this.tasks.filter(t => t.id !== task.id);
+      this.trashTasks.unshift(task);
       if (this.editingId === task.id) this.editingId = null;
+      if (this.isCloud && this.user) this.cloudMutate('upsert', task);
+      this.showToast('🗑 已移入回收站（30 天内可恢复）');
+    },
+
+    restoreTask(task) {
+      task.deleted_at = null;
+      task.updated_at = new Date().toISOString();
+      this.trashTasks = this.trashTasks.filter(t => t.id !== task.id);
+      this.tasks.unshift(task);
+      if (this.isCloud && this.user) this.cloudMutate('upsert', task);
+      this.showToast('✅ 已恢复：' + task.title);
+    },
+
+    purgeTask(task) { // 彻底删除
+      this.trashTasks = this.trashTasks.filter(t => t.id !== task.id);
       if (this.isCloud && this.user) this.cloudMutate('delete', task);
+      this.showToast('已彻底删除');
+    },
+
+    clearTrash() {
+      if (!this.trashTasks.length) return;
+      const all = [...this.trashTasks];
+      this.trashTasks = [];
+      if (this.isCloud && this.user) all.forEach(t => this.cloudMutate('delete', t));
+      this.showToast(`已清空回收站（${all.length} 项）`);
+    },
+
+    purgeOldTrash() {
+      const cutoff = Date.now() - 30 * 86400000;
+      const expired = this.trashTasks.filter(t => t.deleted_at && new Date(t.deleted_at).getTime() < cutoff);
+      if (!expired.length) return;
+      this.trashTasks = this.trashTasks.filter(t => !expired.includes(t));
+      if (this.isCloud && this.user) expired.forEach(t => this.cloudMutate('delete', t));
     },
 
     toggleAll() {
       const target = !this.allDone;
-      const changed = this.tasks.filter(t => t.completed !== target);
+      const changed = this.activeTasks.filter(t => t.completed !== target);
       const now = new Date().toISOString();
       changed.forEach(t => {
         t.completed = target;
@@ -452,11 +1032,14 @@ const app = Vue.createApp({
     },
 
     clearCompleted() {
-      const done = this.tasks.filter(t => t.completed);
+      const done = this.activeTasks.filter(t => t.completed);
       if (!done.length) return;
+      const now = new Date().toISOString();
+      done.forEach(t => { t.deleted_at = now; });
       this.tasks = this.tasks.filter(t => !t.completed);
-      if (this.isCloud && this.user) done.forEach(t => this.cloudMutate('delete', t));
-      this.showToast(`已清除 ${done.length} 项已完成任务`);
+      this.trashTasks.unshift(...done);
+      if (this.isCloud && this.user) done.forEach(t => this.cloudMutate('upsert', t));
+      this.showToast(`已清除 ${done.length} 项（可在回收站恢复）`);
     },
 
     /* ---------------- 标签 ---------------- */
@@ -468,6 +1051,16 @@ const app = Vue.createApp({
       if (this.tagFilter === tag) { this.tagFilter = ''; return; }
       this.tagFilter = tag;
       this.view = 'all';
+    },
+
+    setPriorityFilter(p) {
+      this.priorityFilter = this.priorityFilter === p ? '' : p;
+      this.view = 'all';
+    },
+
+    jumpFilter(key) {
+      this.view = 'all';
+      this.filter = key;
     },
 
     /* ---------------- 子任务 ---------------- */
@@ -503,7 +1096,6 @@ const app = Vue.createApp({
     /* ---------------- 截图待办 / 头像 ---------------- */
     onPaste(e) {
       const t = e.target;
-      // 输入框内的粘贴不拦截（正常贴文字）
       if (t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.isContentEditable)) return;
       const items = (e.clipboardData && e.clipboardData.items) || [];
       for (const it of items) {
@@ -553,11 +1145,13 @@ const app = Vue.createApp({
           tags: ['截图'],
           subtasks: [],
           image: dataUrl,
+          list_id: this.currentListId,
+          sort_order: Date.now(),
           created_at: now,
           updated_at: now,
           completed_at: null,
+          deleted_at: null,
         };
-        // 云端模式：优先上传到 Storage，失败则用 dataUrl 兜底（仍可显示）
         if (this.isCloud && this.user) {
           try {
             const path = this.user.id + '/' + task.id + '.jpg';
@@ -628,93 +1222,6 @@ const app = Vue.createApp({
       this.showToast('✅ 昵称已保存');
     },
 
-    /* ---------------- 统计跳转 / 筛选 ---------------- */
-    jumpFilter(key) {
-      this.view = 'all';
-      this.filter = key;
-    },
-
-    setPriorityFilter(p) {
-      this.priorityFilter = this.priorityFilter === p ? '' : p;
-      this.view = 'all';
-    },
-
-    /* ---------------- 深色模式 ---------------- */
-    applySystemDark(dark) {
-      this.uiDark = dark;
-      document.documentElement.classList.toggle('dark', dark);
-      const meta = document.querySelector('meta[name="theme-color"]');
-      if (meta) meta.content = dark ? '#05070f' : '#f4f6fb';
-    },
-
-    /* ---------------- 到期提醒 ---------------- */
-    requestNotif() {
-      Notification.requestPermission().then(p => {
-        this.notifPerm = p;
-        this.showToast(p === 'granted' ? '🔔 提醒已开启' : '未开启提醒（浏览器权限被拒绝）');
-      });
-    },
-
-    checkReminders() {
-      if (this.notifPerm !== 'granted' || !this.tasks.length) return;
-      const now = Date.now();
-      let store = {};
-      try { store = JSON.parse(localStorage.getItem('todo.reminded') || '{}'); } catch (e) {}
-      let dirty = false;
-      for (const t of this.tasks) {
-        if (!t.remind_at || t.completed) continue;
-        const ts = new Date(t.remind_at).getTime();
-        const key = t.id + '|' + t.remind_at;
-        // 已到提醒时间、未超过 1 天、且没提醒过
-        if (ts <= now && ts > now - 86400000 && !store[key]) {
-          try {
-            new Notification('⏰ 待办提醒', { body: t.title, tag: key });
-          } catch (e) { /* 某些环境不支持构造，忽略 */ }
-          store[key] = 1;
-          dirty = true;
-        }
-      }
-      if (dirty) {
-        try { localStorage.setItem('todo.reminded', JSON.stringify(store)); } catch (e) {}
-      }
-    },
-
-    /* ---------------- 编辑 ---------------- */
-    startEdit(task) {
-      this.editingId = task.id;
-      this.editTask = {
-        id: task.id,
-        title: task.title,
-        priority: task.priority || 'medium',
-        due_date: task.due_date || null,
-        remind_at: this.toLocalInputValue(task.remind_at) || null,
-        tagsText: (task.tags || []).join(', '),
-        repeat: task.repeat || '',
-      };
-      this.$nextTick(() => {
-        const el = document.querySelector('.task-edit .input-title');
-        if (el) { el.focus(); el.select(); }
-      });
-    },
-
-    saveEdit() {
-      if (!this.editTask.title) return;
-      const t = this.tasks.find(x => x.id === this.editingId);
-      if (t) {
-        t.title = this.editTask.title;
-        t.priority = this.editTask.priority;
-        t.due_date = this.editTask.due_date || null;
-        t.remind_at = this.parseLocalDateTime(this.editTask.remind_at);
-        t.repeat = this.editTask.repeat || null;
-        t.tags = this.parseTags(this.editTask.tagsText);
-        t.updated_at = new Date().toISOString();
-        if (this.isCloud && this.user) this.cloudMutate('upsert', t);
-      }
-      this.editingId = null;
-    },
-
-    cancelEdit() { this.editingId = null; },
-
     /* ---------------- 个人信息面板 ---------------- */
     closeProfile() {
       this.showProfile = false;
@@ -765,7 +1272,7 @@ const app = Vue.createApp({
     },
 
     confirmClearAll() {
-      if (!this.clearArmed) { // 第一次点击：进入确认状态，3 秒内再点才执行
+      if (!this.clearArmed) {
         this.clearArmed = true;
         clearTimeout(this._clearTimer);
         this._clearTimer = setTimeout(() => { this.clearArmed = false; }, 3000);
@@ -773,12 +1280,80 @@ const app = Vue.createApp({
       }
       clearTimeout(this._clearTimer);
       this.clearArmed = false;
-      const all = [...this.tasks];
+      const all = [...this.activeTasks];
+      const now = new Date().toISOString();
+      all.forEach(t => { t.deleted_at = now; });
       this.tasks = [];
-      if (this.isCloud && this.user) all.forEach(t => this.cloudMutate('delete', t));
-      this.showToast('已清空全部任务');
+      this.trashTasks.unshift(...all);
+      if (this.isCloud && this.user) all.forEach(t => this.cloudMutate('upsert', t));
+      this.showToast('已清空（可在回收站恢复）');
       this.closeProfile();
     },
+
+    /* ---------------- 到期提醒 ---------------- */
+    requestNotif() {
+      Notification.requestPermission().then(p => {
+        this.notifPerm = p;
+        this.showToast(p === 'granted' ? '🔔 提醒已开启' : '未开启提醒（浏览器权限被拒绝）');
+      });
+    },
+
+    checkReminders() {
+      if (this.notifPerm !== 'granted' || !this.tasks.length) return;
+      const now = Date.now();
+      let store = {};
+      try { store = JSON.parse(localStorage.getItem('todo.reminded') || '{}'); } catch (e) {}
+      let dirty = false;
+      for (const t of this.tasks) {
+        if (!t.remind_at || t.completed) continue;
+        const ts = new Date(t.remind_at).getTime();
+        const key = t.id + '|' + t.remind_at;
+        if (ts <= now && ts > now - 86400000 && !store[key]) {
+          try { new Notification('⏰ 待办提醒', { body: t.title, tag: key }); } catch (e) {}
+          store[key] = 1;
+          dirty = true;
+        }
+      }
+      if (dirty) {
+        try { localStorage.setItem('todo.reminded', JSON.stringify(store)); } catch (e) {}
+      }
+    },
+
+    /* ---------------- 编辑 ---------------- */
+    startEdit(task) {
+      this.editingId = task.id;
+      this.editTask = {
+        id: task.id,
+        title: task.title,
+        priority: task.priority || 'medium',
+        due_date: task.due_date || null,
+        remind_at: this.toLocalInputValue(task.remind_at) || null,
+        tagsText: (task.tags || []).join(', '),
+        repeat: task.repeat || '',
+      };
+      this.$nextTick(() => {
+        const el = document.querySelector('.task-edit input');
+        if (el) { el.focus(); el.select(); }
+      });
+    },
+
+    saveEdit() {
+      if (!this.editTask.title) return;
+      const t = this.tasks.find(x => x.id === this.editingId);
+      if (t) {
+        t.title = this.editTask.title;
+        t.priority = this.editTask.priority;
+        t.due_date = this.editTask.due_date || null;
+        t.remind_at = this.parseLocalDateTime(this.editTask.remind_at);
+        t.repeat = this.editTask.repeat || null;
+        t.tags = this.parseTags(this.editTask.tagsText);
+        t.updated_at = new Date().toISOString();
+        if (this.isCloud && this.user) this.cloudMutate('upsert', t);
+      }
+      this.editingId = null;
+    },
+
+    cancelEdit() { this.editingId = null; },
 
     /* ---------------- 账号 ---------------- */
     toggleAuthMode() {
@@ -808,7 +1383,7 @@ const app = Vue.createApp({
           });
           if (error) throw error;
           if (data.session) {
-            await this.onSignedIn(data.user); // 项目未开启邮箱确认 → 直接登录
+            await this.onSignedIn(data.user);
           } else {
             this.authNotice = '注册成功！请到邮箱点击确认链接后再登录。';
             this.authMode = 'login';
@@ -834,11 +1409,11 @@ const app = Vue.createApp({
     async onSignedIn(user) {
       this.user = user;
       this.pendingCount = this.readQueue().length;
-      // 云端个人资料（昵称/头像存在用户元数据里）
       const meta = (user && user.user_metadata) || {};
       this.nickname = meta.nickname || '';
       this.avatarUrl = meta.avatar_url || '';
       this.nicknameDraft = this.nickname;
+      await this.loadLists();
       await this.loadTasks();
       this.subscribeRealtime();
     },
@@ -855,17 +1430,18 @@ const app = Vue.createApp({
     onSignedOut() {
       this.user = null;
       this.tasks = [];
+      this.trashTasks = [];
       this.editingId = null;
       this.view = 'today';
       this.pendingCount = 0;
       this.authForm.password = '';
       this.authMode = 'login';
-      // 恢复本地模式的个人资料
       try {
         this.nickname = localStorage.getItem('todo.nickname') || '';
         this.avatarUrl = localStorage.getItem('todo.avatar') || '';
         this.nicknameDraft = this.nickname;
       } catch (e) {}
+      this.loadLocalAll();
     },
 
     /* ---------------- 云端数据加载 / 实时同步 ---------------- */
@@ -873,27 +1449,38 @@ const app = Vue.createApp({
       this.loading = true;
       try {
         const { data, error } = await this.sb.from('tasks')
-          .select('*').order('created_at', { ascending: false });
+          .select('*').is('deleted_at', 'null').order('created_at', { ascending: false });
         if (error) throw error;
-        let list = (data || []).map(t => ({ ...t, subtasks: t.subtasks || [], tags: t.tags || [] }));
-        // 把尚未同步的本地队列叠加到服务端数据上，避免离线改动丢失
+        let list = (data || []).map(t => this.normalizeTask(t));
         const queue = this.readQueue();
         if (queue.length) {
           const map = new Map(list.map(t => [t.id, t]));
           for (const op of queue) {
             if (op.type === 'delete') map.delete(op.data.id);
-            else map.set(op.data.id, { ...(map.get(op.data.id) || {}), ...op.data });
+            else map.set(op.data.id, { ...(map.get(op.data.id) || {}), ...this.normalizeTask(op.data) });
           }
           list = [...map.values()];
         }
         this.tasks = list;
         this.writeCache();
       } catch (e) {
-        this.tasks = this.readCache().map(t => ({ ...t, subtasks: t.subtasks || [], tags: t.tags || [] })); // 网络失败 → 使用本地缓存
+        this.tasks = this.readCache().map(t => this.normalizeTask(t));
         if (!this.tasks.length) this.showToast('云端加载失败，正在显示本地缓存');
       } finally {
         this.loading = false;
       }
+    },
+
+    async loadTrash() {
+      if (!this.isCloud || !this.user) return;
+      const { data } = await this.sb.from('tasks').select('*').not('deleted_at', 'is', null)
+        .order('deleted_at', { ascending: false });
+      this.trashTasks = (data || []).map(t => this.normalizeTask(t));
+      this.purgeOldTrash();
+    },
+
+    normalizeTask(t) {
+      return { ...t, subtasks: t.subtasks || [], tags: t.tags || [] };
     },
 
     subscribeRealtime() {
@@ -910,16 +1497,22 @@ const app = Vue.createApp({
       const queue = this.readQueue();
       if (eventType === 'INSERT' || eventType === 'UPDATE') {
         if (!newRow || !newRow.id) return;
-        // 该行存在未同步的本地修改时，保留本地版本，等队列冲刷后自然对齐
         if (queue.some(op => op.data.id === newRow.id && op.type !== 'delete')) return;
-        const normalized = { ...newRow, subtasks: newRow.subtasks || [], tags: newRow.tags || [] };
-        const i = this.tasks.findIndex(t => t.id === newRow.id);
-        if (i >= 0) this.tasks.splice(i, 1, { ...this.tasks[i], ...normalized });
-        else this.tasks.unshift(normalized);
+        const row = this.normalizeTask(newRow);
+        if (row.deleted_at) {
+          // 已删除：从主列表移除，进回收站
+          this.tasks = this.tasks.filter(t => t.id !== row.id);
+          if (!this.trashTasks.some(t => t.id === row.id)) this.trashTasks.unshift(row);
+          return;
+        }
+        this.trashTasks = this.trashTasks.filter(t => t.id !== row.id);
+        const i = this.tasks.findIndex(t => t.id === row.id);
+        if (i >= 0) this.tasks.splice(i, 1, { ...this.tasks[i], ...row });
+        else this.tasks.unshift(row);
       } else if (eventType === 'DELETE') {
         if (!oldRow || !oldRow.id) return;
-        if (queue.some(op => op.data.id === oldRow.id && op.type !== 'delete')) return;
         this.tasks = this.tasks.filter(t => t.id !== oldRow.id);
+        this.trashTasks = this.trashTasks.filter(t => t.id !== oldRow.id);
       }
     },
 
@@ -937,9 +1530,12 @@ const app = Vue.createApp({
         tags: task.tags || [],
         subtasks: task.subtasks || [],
         image: task.image || null,
+        list_id: task.list_id || null,
+        sort_order: task.sort_order != null ? task.sort_order : Date.now(),
         created_at: task.created_at,
         updated_at: task.updated_at,
         completed_at: task.completed_at || null,
+        deleted_at: task.deleted_at || null,
       };
     },
 
@@ -949,14 +1545,13 @@ const app = Vue.createApp({
     },
 
     isSchemaError(e) {
-      // 云端数据库缺少新功能字段（subtasks/tags/…）时 PostgREST 返回 PGRST204
       const msg = (e && (e.message || e.code)) || '';
       return /PGRST204|schema cache|Could not find the .* column/i.test(String(msg));
     },
 
     async cloudMutate(type, task) {
       const queue = this.readQueue();
-      if (queue.length) { // 已处于离线积压状态：直接入队，保持顺序
+      if (queue.length) {
         queue.push({ type, data: task });
         this.writeQueue(queue);
         return;
@@ -972,7 +1567,7 @@ const app = Vue.createApp({
           queue.push({ type, data: task });
           this.writeQueue(queue);
         } else if (this.isSchemaError(e)) {
-          this.showToast('云端数据库需要升级：请按 SETUP.md 运行「v3 升级 SQL」');
+          this.showToast('云端数据库需要升级：请按 SETUP.md 运行「v6 升级 SQL」');
         } else {
           this.showToast('同步失败：' + ((e && e.message) || e));
         }
@@ -1000,11 +1595,10 @@ const app = Vue.createApp({
           }
         } catch (e) {
           if (!navigator.onLine || this.isNetworkError(e)) {
-            remain.push(...queue.slice(i)); // 网络中断：剩余全部保留
+            remain.push(...queue.slice(i));
             offlineHit = true;
             break;
           }
-          // 非网络错误（如数据冲突）：丢弃该条并提示，避免队列卡死
           this.showToast('一条更改同步失败已跳过：' + ((e && e.message) || e));
         }
       }
@@ -1014,16 +1608,25 @@ const app = Vue.createApp({
     },
 
     /* ---------------- localStorage 读写 ---------------- */
-    saveLocal() {
-      try { localStorage.setItem('todo.tasks.v1', JSON.stringify(this.tasks)); } catch (e) {}
+    storageKey(name) {
+      return `todo.${this.isCloud && this.user ? this.user.id : 'local'}.${name}`;
     },
-    readLocal() {
+    loadLocalAll() {
       try {
-        const raw = localStorage.getItem('todo.tasks.v1');
-        const list = JSON.parse(raw || '[]');
-        return (Array.isArray(list) ? list.filter(t => t && t.id && t.title) : [])
-          .map(t => ({ ...t, subtasks: t.subtasks || [], tags: t.tags || [] }));
-      } catch (e) { return []; }
+        const all = JSON.parse(localStorage.getItem('todo.tasks.v1') || '[]')
+          .filter(t => t && t.id && t.title);
+        this.tasks = all.filter(t => !t.deleted_at).map(t => this.normalizeTask(t));
+        this.trashTasks = all.filter(t => t.deleted_at);
+        try {
+          this.lists = JSON.parse(localStorage.getItem('todo.lists') || '[]');
+        } catch (e) {}
+        this.currentListId = localStorage.getItem(this.storageKey('currentList')) || null;
+      } catch (e) {}
+    },
+    saveLocal() {
+      try {
+        localStorage.setItem('todo.tasks.v1', JSON.stringify([...this.tasks, ...this.trashTasks]));
+      } catch (e) {}
     },
     cacheKey() { return 'todo.cloud.' + (this.user ? this.user.id : 'anon'); },
     writeCache() {

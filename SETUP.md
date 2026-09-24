@@ -100,6 +100,32 @@ const CONFIG = {
 
 ---
 
+## ⬆️ v6 升级 SQL（回收站 / 多清单 / 手动排序）
+
+v6 新增回收站（软删除）、多清单、手动排序，云端需要三个字段和一张清单表。
+在 Supabase → **SQL Editor** 粘贴运行：
+
+```sql
+alter table public.tasks add column if not exists deleted_at timestamptz;
+alter table public.tasks add column if not exists sort_order double precision;
+alter table public.tasks add column if not exists list_id uuid;
+
+create table if not exists public.lists (
+  id uuid primary key default gen_random_uuid(),
+  user_id uuid not null references auth.users (id) on delete cascade,
+  name text not null,
+  created_at timestamptz not null default now()
+);
+alter table public.lists enable row level security;
+drop policy if exists "own lists" on public.lists;
+create policy "own lists" on public.lists
+  for all using (auth.uid() = user_id) with check (auth.uid() = user_id);
+```
+
+> 不运行的降级行为：删除/清单相关改动无法同步到云端并提示升级；本地模式不受影响。
+
+---
+
 ## ⬆️ v5 升级 SQL（启用云端截图存储）
 
 v5 新增截图待办功能，云端模式需要一个图片存储桶。在 Supabase → **SQL Editor** 粘贴运行：

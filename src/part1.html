@@ -14,7 +14,7 @@
 <meta name="mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <meta name="apple-mobile-web-app-title" content="待办清单">
-<script>/* 深色模式预应用：避免刷新闪烁 */ try { if (matchMedia('(prefers-color-scheme: dark)').matches) document.documentElement.classList.add('dark'); } catch (e) {}</script>
+<script>/* 外观预应用：避免刷新闪烁 */ try { var ap = localStorage.getItem('todo.appearance') || 'auto'; var dk = ap === 'dark' || (ap === 'auto' && matchMedia('(prefers-color-scheme: dark)').matches); if (dk) document.documentElement.classList.add('dark'); var ac = localStorage.getItem('todo.accent'); if (ac) document.documentElement.setAttribute('data-accent', ac); } catch (e) {}</script>
 <style>
 :root {
   color-scheme: light dark;
@@ -349,6 +349,75 @@ input, select { font-family: inherit; }
   max-width: 86vw; text-align: center;
 }
 
+
+/* ---------- v6：主题色变体 ---------- */
+html[data-accent='violet'] { --accent:#8b5cf6; --accent-bright:#a78bfa; --accent-2:#22d3ee; --glow:rgba(139,92,246,.13); --glow2:rgba(34,211,238,.10); }
+html[data-accent='rose'] { --accent:#f43f5e; --accent-bright:#fb7185; --accent-2:#f59e0b; --glow:rgba(244,63,94,.11); --glow2:rgba(245,158,11,.12); }
+html[data-accent='green'] { --accent:#10b981; --accent-bright:#34d399; --accent-2:#22d3ee; --glow:rgba(16,185,129,.12); --glow2:rgba(34,211,238,.10); }
+html[data-accent='amber'] { --accent:#f59e0b; --accent-bright:#fbbf24; --accent-2:#6366f1; --glow:rgba(245,158,11,.12); --glow2:rgba(99,102,241,.12); }
+
+/* ---------- v6：清单切换 / 搜索 ---------- */
+.list-bar { display: flex; align-items: center; gap: 8px; margin-bottom: 12px; flex-wrap: wrap; }
+.list-bar .list-select { width: 170px; }
+.search-row { display: flex; gap: 8px; margin-bottom: 10px; }
+.search-row .search-input { flex: 1; }
+.flame { font-weight: 800; }
+
+/* ---------- v6：日历视图 ---------- */
+.cal-card { padding: 16px; }
+.cal-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 10px; }
+.cal-head h3 { margin: 0; font-size: 15px; font-weight: 700; }
+.cal-grid { display: grid; grid-template-columns: repeat(7, 1fr); gap: 4px; }
+.cal-week { text-align: center; font-size: 11px; color: var(--muted); padding: 2px 0; font-weight: 700; }
+.cal-cell {
+  aspect-ratio: 1; border-radius: 10px; display: flex; flex-direction: column;
+  align-items: center; justify-content: center; cursor: pointer; font-size: 13px;
+  border: 1px solid transparent; transition: all .12s; position: relative;
+}
+.cal-cell:hover { background: color-mix(in srgb, var(--accent) 10%, transparent); }
+.cal-cell.dim { color: var(--muted); opacity: .4; }
+.cal-cell.today { border-color: var(--accent); font-weight: 800; }
+.cal-cell.selected { background: linear-gradient(120deg, var(--accent), var(--accent-2)); color: #fff; }
+.cal-dots { display: flex; gap: 3px; margin-top: 2px; height: 5px; }
+.cal-dot { width: 5px; height: 5px; border-radius: 50%; background: var(--accent); }
+.cal-cell.selected .cal-dot { background: #fff; }
+.cal-day-list { margin-top: 12px; }
+
+/* ---------- v6：回收站 ---------- */
+.trash-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-bottom: 10px; flex-wrap: wrap; }
+.trash-note { font-size: 12px; color: var(--muted); }
+
+/* ---------- v6：番茄钟悬浮窗 ---------- */
+.pomo-widget {
+  position: fixed; right: 16px; bottom: calc(16px + env(safe-area-inset-bottom)); z-index: 50;
+  padding: 12px 14px; width: 230px; animation: slideIn .25s ease;
+}
+.pomo-widget .pomo-title { font-size: 13px; font-weight: 700; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.pomo-widget .pomo-clock { font-size: 26px; font-weight: 800; font-variant-numeric: tabular-nums;
+  background: linear-gradient(120deg, var(--accent-bright), var(--accent-2));
+  -webkit-background-clip: text; background-clip: text; -webkit-text-fill-color: transparent; }
+.pomo-track { height: 4px; background: var(--border); border-radius: 999px; overflow: hidden; margin: 6px 0 8px; }
+.pomo-fill { height: 100%; background: linear-gradient(90deg, var(--accent), var(--accent-2)); transition: width 1s linear; }
+
+/* ---------- v6：拖拽 / 语音 / 模板菜单 ---------- */
+.task-item[draggable='true'] { cursor: grab; }
+.task-item.dragging { opacity: .35; }
+.mic-btn.listening { color: #f43f5e; animation: pulse 1s infinite; }
+.tpl-wrap { position: relative; }
+.tpl-menu {
+  position: absolute; top: calc(100% + 6px); left: 0; z-index: 30; min-width: 220px;
+  padding: 6px; animation: fade .15s;
+}
+.tpl-menu button { display: block; width: 100%; text-align: left; border: none; background: transparent;
+  color: var(--text); padding: 7px 10px; border-radius: 8px; font-size: 13px; }
+.tpl-menu button:hover { background: color-mix(in srgb, var(--accent) 12%, transparent); }
+
+/* ---------- v6：外观设置 ---------- */
+.swatches { display: flex; gap: 10px; align-items: center; }
+.swatch { width: 26px; height: 26px; border-radius: 50%; border: 2px solid transparent; cursor: pointer; padding: 0; }
+.swatch.active { border-color: var(--text); box-shadow: 0 0 0 3px var(--bg); }
+.weekly-btn { margin-top: 10px; }
+
 @media (max-width: 560px) {
   .wrap { padding-top: 16px; }
   .logo { font-size: 21px; }
@@ -399,10 +468,24 @@ input, select { font-family: inherit; }
     </header>
 
     <!-- 视图切换 -->
+    <!-- 清单切换 -->
+    <div class="list-bar">
+      <n-select v-model:value="currentListValue" :options="listOptions" size="small" class="list-select"></n-select>
+      <n-button size="tiny" quaternary @click="showNewListInput = !showNewListInput" title="新建清单">＋ 清单</n-button>
+      <n-button v-if="currentListId" size="tiny" quaternary type="error" @click="deleteCurrentList" title="删除当前清单（任务移回默认）">✕</n-button>
+      <template v-if="showNewListInput">
+        <n-input v-model:value="newListName" size="small" placeholder="清单名称，回车创建" maxlength="12"
+                 style="width:160px" @keydown.enter.prevent="createList"></n-input>
+        <n-button size="tiny" type="primary" @click="createList">创建</n-button>
+      </template>
+    </div>
+
     <nav class="view-nav">
-      <button type="button" :class="{ active: view === 'today' }" @click="view = 'today'">☀️ 今天</button>
-      <button type="button" :class="{ active: view === 'all' }" @click="view = 'all'">📋 全部</button>
-      <button type="button" :class="{ active: view === 'stats' }" @click="view = 'stats'">📊 统计</button>
+      <button type="button" :class="{ active: view === 'today' }" @click="view = 'today'" title="快捷键 1">☀️ 今天</button>
+      <button type="button" :class="{ active: view === 'all' }" @click="view = 'all'" title="快捷键 2">📋 全部</button>
+      <button type="button" :class="{ active: view === 'calendar' }" @click="view = 'calendar'; calSelected = null" title="快捷键 3">📅 日历</button>
+      <button type="button" :class="{ active: view === 'stats' }" @click="view = 'stats'" title="快捷键 4">📊 统计</button>
+      <button type="button" :class="{ active: view === 'trash' }" @click="view = 'trash'; loadTrash()">♻️ 回收站</button>
       <button v-if="canNotify && notifPerm === 'default'" type="button" class="notif-btn" @click="requestNotif" title="开启浏览器提醒通知">🔔 开启提醒</button>
       <span v-else-if="notifPerm === 'granted'" class="notif-btn granted" style="margin-left:auto;font-size:13px;font-weight:600;">🔔 提醒已开启</span>
     </nav>
@@ -422,9 +505,17 @@ input, select { font-family: inherit; }
       <n-date-picker v-model:formatted-value="newTask.dueDate" type="date"
                      value-format="yyyy-MM-dd" format="yyyy-MM-dd" clearable
                      placeholder="截止日期" style="width:140px" ></n-date-picker>
+      <div v-if="templates.length" class="tpl-wrap">
+        <n-button quaternary size="small" @click="showTplMenu = !showTplMenu" title="任务模板">📋 模板</n-button>
+        <div v-if="showTplMenu" class="tpl-menu glass">
+          <button v-for="tpl in templates" :key="tpl.id" type="button" @click="applyTemplate(tpl)">📌 {{ tpl.name }}</button>
+        </div>
+      </div>
       <n-button quaternary size="small" @click="showMore = !showMore">
         {{ showMore ? '收起 ⌃' : '更多 ⌄' }}
       </n-button>
+      <n-button quaternary size="small" class="mic-btn" :class="{ listening }" @click="toggleVoice" :title="listening ? '停止聆听' : '语音输入'">{{ listening ? '⏹ 听写中' : '🎤' }}</n-button>
+      <n-button quaternary size="small" :loading="aiBusy" @click="smartParse" title="智能解析：自动识别日期/优先级/提醒（可在个人面板配置 AI Key）">✨</n-button>
       <n-button type="primary" attr-type="submit">添加</n-button>
     </form>
 
@@ -435,8 +526,14 @@ input, select { font-family: inherit; }
       <span v-if="todayDoneCount">✅ 今天已完成 <b>{{ todayDoneCount }}</b></span>
     </div>
 
+    <!-- 搜索（全部视图） -->
+    <div v-if="view === 'all' && activeTasks.length" class="search-row">
+      <n-input v-model:value="search" class="search-input" size="small" round clearable
+               placeholder="搜索任务 / 子任务 / 标签（按 / 聚焦）"></n-input>
+    </div>
+
     <!-- 工具栏（全部视图） -->
-    <div v-if="view === 'all' && tasks.length" class="toolbar">
+    <div v-if="view === 'all' && activeTasks.length" class="toolbar">
       <div class="filters glass">
         <button v-for="f in filterDefs" :key="f.key" type="button"
                 :class="{ active: filter === f.key }" @click="filter = f.key">
@@ -476,6 +573,71 @@ input, select { font-family: inherit; }
     <!-- 列表 / 加载 / 空状态 / 统计 -->
     <div v-if="loading" class="empty">正在加载任务…</div>
 
+    <div v-else-if="view === 'calendar'" class="stats-view">
+      <div class="cal-card glass">
+        <div class="cal-head">
+          <n-button size="tiny" quaternary @click="calPrevMonth">‹</n-button>
+          <h3>{{ calGrid.title }}</h3>
+          <n-button size="tiny" quaternary @click="calNextMonth">›</n-button>
+        </div>
+        <div class="cal-grid">
+          <div v-for="w in ['一','二','三','四','五','六','日']" :key="w" class="cal-week">周{{ w }}</div>
+          <div v-for="d in calGrid.days" :key="d.date" class="cal-cell"
+               :class="{ dim: !d.inMonth, today: d.isToday, selected: calSelected === d.date }"
+               @click="calSelected = (calSelected === d.date ? null : d.date)">
+            <span>{{ d.day }}</span>
+            <div v-if="d.count" class="cal-dots"><span v-for="i in Math.min(d.count, 3)" :key="i" class="cal-dot"></span></div>
+          </div>
+        </div>
+      </div>
+      <div v-if="calSelected" class="cal-day-list">
+        <div class="trash-head">
+          <b>📅 {{ calSelected }} 的任务（{{ calDayTasks.length }}）</b>
+        </div>
+        <ul v-if="calDayTasks.length" class="task-list">
+          <li v-for="task in calDayTasks" :key="task.id" class="task-item" :class="{ done: task.completed }">
+            <div class="task-view">
+              <n-checkbox :checked="task.completed" @update:checked="toggleTask(task)" style="margin-top:3px"></n-checkbox>
+              <div class="task-main">
+                <div class="task-title">{{ task.title }}</div>
+                <div class="task-meta">
+                  <span class="priority-tag" :class="'p-' + (task.priority || 'medium')">{{ priorityLabel(task.priority) }}</span>
+                  <span v-for="g in (task.tags || [])" :key="g" class="tag-chip">#{{ g }}</span>
+                </div>
+              </div>
+              <button type="button" class="icon-btn edit" title="编辑" @click="startEdit(task)">✏️</button>
+              <button type="button" class="icon-btn del" title="移入回收站" @click="removeTask(task)">✕</button>
+            </div>
+          </li>
+        </ul>
+        <div v-else class="empty">这一天没有到期任务</div>
+      </div>
+    </div>
+
+    <div v-else-if="view === 'trash'">
+      <div class="trash-head">
+        <b>♻️ 回收站（{{ trashTasks.length }} 项）</b>
+        <n-button v-if="trashTasks.length" size="tiny" quaternary type="error" @click="clearTrash">清空回收站</n-button>
+      </div>
+      <p class="trash-note">删除的任务保留 30 天，之后自动清除</p>
+      <ul v-if="trashTasks.length" class="task-list">
+        <li v-for="task in trashTasks" :key="task.id" class="task-item" :class="{ done: task.completed }">
+          <div class="task-view">
+            <div class="task-main">
+              <div class="task-title">{{ task.title }}</div>
+              <div class="task-meta">
+                <span class="priority-tag" :class="'p-' + (task.priority || 'medium')">{{ priorityLabel(task.priority) }}</span>
+                <span v-if="task.due_date" class="due">截止 {{ task.due_date }}</span>
+              </div>
+            </div>
+            <n-button size="tiny" type="primary" quaternary @click="restoreTask(task)">↩ 恢复</n-button>
+            <n-button size="tiny" type="error" quaternary @click="purgeTask(task)">🧹 彻底删除</n-button>
+          </div>
+        </li>
+      </ul>
+      <div v-else class="empty">回收站是空的 ♻️</div>
+    </div>
+
     <div v-else-if="view === 'stats'" class="stats-view">
       <div class="stat-card glass">
         <h3>📈 最近 14 天完成趋势</h3>
@@ -504,6 +666,19 @@ input, select { font-family: inherit; }
         </div>
       </div>
       <div class="stat-card glass">
+        <h3>🔥 本周回顾</h3>
+        <div class="stats-grid" style="grid-template-columns:repeat(3,1fr)">
+          <div class="stat"><b>{{ weeklySummary.done }}</b><span>本周完成</span></div>
+          <div class="stat"><b>{{ weeklySummary.minutes ? weeklySummary.minutes + '′' : '—' }}</b><span>番茄专注</span></div>
+          <div class="stat"><b>{{ streak ? streak + ' 天' : '—' }}</b><span>连续打卡</span></div>
+        </div>
+        <p style="font-size:12px;color:var(--muted);margin:10px 0 0">
+          {{ weeklySummary.overdue ? '⚠ 还有 ' + weeklySummary.overdue + ' 项逾期' : '🎉 本周无逾期任务' }}
+          <template v-if="weeklySummary.topTags.length"> · 高频标签：{{ weeklySummary.topTags.join(' · ') }}</template>
+        </p>
+        <n-button size="small" class="weekly-btn" @click="buildWeeklyCard">🖼 生成分享卡片</n-button>
+      </div>
+      <div class="stat-card glass">
         <h3>✨ 总览（点击跳转）</h3>
         <div class="stats-grid">
           <div class="stat clickable" @click="jumpFilter('all')" title="查看全部任务"><b>{{ tasks.length }}</b><span>总任务</span></div>
@@ -516,7 +691,9 @@ input, select { font-family: inherit; }
 
     <ul v-else-if="viewList.length" class="task-list">
       <li v-for="task in viewList" :key="task.id" class="task-item"
-          :class="{ done: task.completed, editing: editingId === task.id, 'overdue-top': isOverdue(task) }">
+          :class="{ done: task.completed, editing: editingId === task.id, 'overdue-top': isOverdue(task), dragging: dragId === task.id }"
+          :draggable="view === 'all' && sortBy === 'manual' && editingId !== task.id ? 'true' : 'false'"
+          @dragstart="onDragStart(task, $event)" @dragend="onDragEnd" @dragover.prevent @drop.prevent="onDropOn(task)">
 
         <!-- 查看态 -->
         <div v-if="editingId !== task.id" class="task-view">
@@ -529,6 +706,8 @@ input, select { font-family: inherit; }
               <span v-if="task.repeat" class="repeat-ico" :title="'重复任务：' + repeatLabel(task.repeat)">🔁 {{ repeatLabel(task.repeat) }}</span>
               <span v-if="task.remind_at" class="due soon" title="提醒时间">🔔 {{ fmtRemind(task.remind_at) }}</span>
               <span v-for="g in (task.tags || [])" :key="g" class="tag-chip clickable" @click.stop="setTagFilter(g)">#{{ g }}</span>
+              <button v-if="!task.completed" type="button" class="subtask-chip" title="开始 25 分钟番茄钟专注"
+                      @click.stop="startPomo(task)">🍅</button>
               <button type="button" class="subtask-chip"
                       :class="{ open: expanded[task.id] }" @click.stop="toggleExpand(task.id)"
                       :title="task.subtasks && task.subtasks.length
@@ -574,6 +753,7 @@ input, select { font-family: inherit; }
           <n-input v-model:value="editTask.tagsText" placeholder="标签（逗号分隔）" maxlength="60" size="small" style="flex:1 1 130px" ></n-input>
           <n-button type="primary" size="small" attr-type="submit">保存</n-button>
           <n-button size="small" quaternary @click="cancelEdit">取消</n-button>
+          <n-button size="small" quaternary title="把当前任务的属性存为模板" @click="saveTemplateFromTask(tasks.find(t => t.id === editingId) || {})">📋 存为模板</n-button>
         </form>
       </li>
     </ul>
@@ -611,6 +791,38 @@ input, select { font-family: inherit; }
       </div>
 
       <div class="profile-section">
+        <h3>外观</h3>
+        <n-radio-group :value="appearance" size="small" @update:value="setAppearance">
+          <n-radio-button value="auto">跟随系统</n-radio-button>
+          <n-radio-button value="light">浅色</n-radio-button>
+          <n-radio-button value="dark">深色</n-radio-button>
+        </n-radio-group>
+        <div class="swatches" style="margin-top:12px">
+          <button v-for="(a, key) in { cyan: '青', violet: '紫', rose: '粉', green: '绿', amber: '橙' }" :key="key"
+                  type="button" class="swatch" :class="{ active: accent === key }"
+                  :style="{ background: { cyan:'#22d3ee', violet:'#8b5cf6', rose:'#f43f5e', green:'#10b981', amber:'#f59e0b' }[key] }"
+                  :title="'主题色：' + a" @click="setAccent(key)"></button>
+        </div>
+      </div>
+
+      <div class="profile-section">
+        <h3>AI 解析（可选）</h3>
+        <form class="nick-form" @submit.prevent="saveAiKey()">
+          <n-input v-model:value="aiKey" placeholder="智谱 API Key（留空用内置规则）" size="small"></n-input>
+          <n-button type="primary" size="small" attr-type="submit">保存</n-button>
+        </form>
+        <p class="trash-note" style="margin:6px 0 0">默认使用内置规则解析（离线可用）；填 Key 后走 glm-4-flash，识别更准</p>
+      </div>
+
+      <div class="profile-section" v-if="templates.length">
+        <h3>任务模板</h3>
+        <div v-for="tpl in templates" :key="tpl.id" style="display:flex;align-items:center;gap:8px;margin-bottom:6px">
+          <span class="tag-chip" style="flex:1">📌 {{ tpl.name }}</span>
+          <n-button size="tiny" quaternary type="error" @click="deleteTemplate(tpl.id)">删除</n-button>
+        </div>
+      </div>
+
+      <div class="profile-section">
         <h3>任务统计</h3>
         <div class="stats-grid">
           <div class="stat"><b>{{ tasks.length }}</b><span>总任务</span></div>
@@ -642,9 +854,20 @@ input, select { font-family: inherit; }
         </button>
       </div>
 
-      <p class="profile-version">待办清单 v5 · {{ isCloud ? '云同步模式' : '本地模式' }}</p>
+      <p class="profile-version">待办清单 v6 · {{ isCloud ? '云同步模式' : '本地模式' }}</p>
     </aside>
   </template>
+
+  <!-- 番茄钟悬浮窗 -->
+  <div v-if="pomo.taskId" class="pomo-widget glass">
+    <div class="pomo-title" :title="pomo.title">🍅 {{ pomo.title }}</div>
+    <div class="pomo-clock">{{ pomoClock() }}</div>
+    <div class="pomo-track"><div class="pomo-fill" :style="{ width: pomoPct() + '%' }"></div></div>
+    <div style="display:flex;gap:6px">
+      <n-button size="tiny" @click="togglePomoPause">{{ pomo.running ? '暂停' : '继续' }}</n-button>
+      <n-button size="tiny" quaternary type="error" @click="stopPomo()">放弃</n-button>
+    </div>
+  </div>
 
   <!-- 截图预览灯箱 -->
   <div v-if="imagePreview" class="lightbox" @click="imagePreview = null" title="点击关闭">
