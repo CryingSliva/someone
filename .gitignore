@@ -25,3 +25,7 @@ Thumbs.db
 .vapid_private
 .vapid_public
 .supabase_service_key
+
+.supabase_pat
+
+.cron_secret

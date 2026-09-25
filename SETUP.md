@@ -120,14 +120,13 @@ create policy "own subs" on public.push_subscriptions
   for all using (auth.uid() = user_id) with check (auth.uid() = user_id);
 ```
 
-另外需要**一次性**配置（我方代管）：
+推送架构（Supabase Edge Function + pg_cron，我方代管）：
 
-1. `.vapid_public` / `.vapid_private`：Web Push 密钥对（`npx web-push generate-vapid-keys` 生成）
-2. `.supabase_service_key`：Supabase → Settings → API → **secret key**（`sb_secret_` 开头），存为项目根目录同名文件
-3. 运行 `node src/setup-push-env.js` 把三者写入 Netlify 环境变量，再 `node src/deploy.js` 部署
-
-推送服务端是 `src/functions/push-reminders.js`（Netlify 定时函数，每分钟扫描到期提醒并推送），
-随 `node src/build.js` 自动打包进 `dist/netlify/functions/`。用户在应用「个人面板 → 离线推送」一键开启。
+- `src/functions/push-reminders-edge.ts`：推送函数（纯 WebCrypto 实现 VAPID + RFC8291 加密，零依赖）
+- `src/deploy-edge.mjs`：一键部署函数（需 `.supabase_pat` 令牌）
+- 调度：数据库 pg_cron 每分钟调用函数（token 存 `app_config` 表）
+- 密钥：EC P-256 JWK 存 `app_config` 表（公钥内联应用配置）
+- 用户在应用「个人面板 → 离线推送」一键开启，支持多设备同时接收
 
 ---
 
