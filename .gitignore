@@ -29,3 +29,4 @@ Thumbs.db
 .supabase_pat
 
 .cron_secret
+.vapid_jwk.json
