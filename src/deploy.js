@@ -32,8 +32,8 @@ const auth = { Authorization: `Bearer ${token}` };
   // 1. 找到目标站点
   const sites = await fetch(`${API}/sites`, { headers: auth }).then((r) => r.json());
   if (!Array.isArray(sites)) { console.error('✗ 令牌无效或无法读取站点列表', sites); process.exit(1); }
-  const site = sites.find((s) => s.name === SITE_NAME) || sites[0];
-  if (!site) { console.error('✗ 账号下没有可用站点'); process.exit(1); }
+  const site = sites.find((s) => s.name === SITE_NAME);
+  if (!site) { console.error(`✗ 找不到名为「${SITE_NAME}」的 Netlify 站点；请检查 NETLIFY_SITE 配置`); process.exit(1); }
   console.log(`目标站点: ${site.name} → ${site.ssl_url}`);
 
   // 2. 把 dist/ 打包成 zip（archiver 生成正斜杠路径的标准 zip）

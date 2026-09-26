@@ -1512,6 +1512,7 @@ const app = Vue.createApp({
       this.pushplusDraft = meta.pushplus_token || '';
       await this.loadLists();
       await this.loadTasks();
+      this.flushQueue();
       this.subscribeRealtime();
       this.checkPushState();
     },
@@ -1649,60 +1650,48 @@ const app = Vue.createApp({
 
     async cloudMutate(type, task) {
       const queue = this.readQueue();
-      if (queue.length) {
-        queue.push({ type, data: task });
-        this.writeQueue(queue);
-        return;
-      }
+      const announceSync = queue.length > 0;
+      queue.push({ type, data: JSON.parse(JSON.stringify(task)) });
+      this.writeQueue(queue);
+      await this.flushQueue(announceSync);
+    },
+
+    async flushQueue(announceSuccess = true) {
+      if (!this.isCloud || !this.user || this.syncing) return;
+      const hadQueue = this.readQueue().length > 0;
+      if (!hadQueue) return;
       this.syncing = true;
+      let offlineHit = false;
       try {
-        const { error } = type === 'delete'
-          ? await this.sb.from('tasks').delete().eq('id', task.id)
-          : await this.sb.from('tasks').upsert(this.toRow(task));
-        if (error) throw error;
-      } catch (e) {
-        if (!navigator.onLine || this.isNetworkError(e)) {
-          queue.push({ type, data: task });
-          this.writeQueue(queue);
-        } else if (this.isSchemaError(e)) {
-          this.showToast('云端数据库需要升级：请按 SETUP.md 运行「v6 升级 SQL」');
-        } else {
-          this.showToast('同步失败：' + ((e && e.message) || e));
+        // 每次只处理队首，完成后重新读取队列。同步期间产生的新改动会保留在队尾。
+        while (true) {
+          const queue = this.readQueue();
+          if (!queue.length) break;
+          const op = queue[0];
+          try {
+            const { error } = op.type === 'delete'
+              ? await this.sb.from('tasks').delete().eq('id', op.data.id)
+              : await this.sb.from('tasks').upsert(this.toRow(op.data));
+            if (error) throw error;
+          } catch (e) {
+            if (!navigator.onLine || this.isNetworkError(e)) {
+              offlineHit = true;
+              break;
+            }
+            if (this.isSchemaError(e)) {
+              this.showToast('云端数据库需要升级：请按 SETUP.md 运行「v6 升级 SQL」');
+            } else {
+              this.showToast('一条更改同步失败已跳过：' + ((e && e.message) || e));
+            }
+          }
+          const remaining = this.readQueue();
+          remaining.shift();
+          this.writeQueue(remaining);
         }
       } finally {
         this.syncing = false;
       }
-    },
-
-    async flushQueue() {
-      if (!this.isCloud || !this.user || this.syncing) return;
-      const queue = this.readQueue();
-      if (!queue.length) return;
-      this.syncing = true;
-      const remain = [];
-      let offlineHit = false;
-      for (let i = 0; i < queue.length; i++) {
-        const op = queue[i];
-        try {
-          if (op.type === 'delete') {
-            const { error } = await this.sb.from('tasks').delete().eq('id', op.data.id);
-            if (error) throw error;
-          } else {
-            const { error } = await this.sb.from('tasks').upsert(this.toRow(op.data));
-            if (error) throw error;
-          }
-        } catch (e) {
-          if (!navigator.onLine || this.isNetworkError(e)) {
-            remain.push(...queue.slice(i));
-            offlineHit = true;
-            break;
-          }
-          this.showToast('一条更改同步失败已跳过：' + ((e && e.message) || e));
-        }
-      }
-      this.writeQueue(remain);
-      this.syncing = false;
-      if (!remain.length && !offlineHit) this.showToast('✅ 所有更改已同步');
+      if (announceSuccess && !offlineHit && !this.readQueue().length) this.showToast('✅ 所有更改已同步');
     },
 
     /* ---------------- localStorage 读写 ---------------- */

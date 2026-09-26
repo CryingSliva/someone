@@ -139,10 +139,17 @@ Deno.serve(async (req) => {
 
     const userIds = [...new Set(tasks.map((t) => t.user_id))];
     const subs = await fetch(
-      `${SB_URL}/rest/v1/push_subscriptions?select=sub,endpoint&user_id=in.(${userIds.join(',')})`,
+      `${SB_URL}/rest/v1/push_subscriptions?select=user_id,sub,endpoint&user_id=in.(${userIds.join(',')})`,
       { headers: H },
     ).then((r) => r.json());
-    const subList = Array.isArray(subs) ? subs : [];
+    const subsByUser = new Map<string, typeof subs>();
+    if (Array.isArray(subs)) {
+      for (const sub of subs) {
+        const userSubs = subsByUser.get(sub.user_id) || [];
+        userSubs.push(sub);
+        subsByUser.set(sub.user_id, userSubs);
+      }
+    }
 
     // 微信推送通道（PushPlus）：token 存在用户元数据，国内设备不依赖谷歌服务
     const users = await fetch(
@@ -159,7 +166,7 @@ Deno.serve(async (req) => {
     for (const t of tasks) {
       const payload = JSON.stringify({ title: '⏰ 待办提醒', body: t.title, tag: 'todo-' + t.id });
       // 通道一：Web Push（谷歌/苹果设备）
-      for (const s of subList) {
+      for (const s of (subsByUser.get(t.user_id) || [])) {
         try {
           const status = await sendPush(s.sub, payload);
           if (status === 201 || status === 200) sent++;
