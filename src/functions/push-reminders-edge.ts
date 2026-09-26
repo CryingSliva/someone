@@ -144,15 +144,43 @@ Deno.serve(async (req) => {
     ).then((r) => r.json());
     const subList = Array.isArray(subs) ? subs : [];
 
+    // 微信推送通道（PushPlus）：token 存在用户元数据，国内设备不依赖谷歌服务
+    const users = await fetch(
+      `${SB_URL}/rest/v1/users?select=id,raw_user_meta_data&id=in.(${userIds.join(',')})`,
+      { headers: H },
+    ).then((r) => r.json()).catch(() => []);
+    const ppByUser: Record<string, string> = {};
+    for (const u of (Array.isArray(users) ? users : [])) {
+      ppByUser[u.id] = (u.raw_user_meta_data || {}).pushplus_token || '';
+    }
+
     let sent = 0, failed = 0;
     const deadEndpoints = [];
     for (const t of tasks) {
       const payload = JSON.stringify({ title: '⏰ 待办提醒', body: t.title, tag: 'todo-' + t.id });
+      // 通道一：Web Push（谷歌/苹果设备）
       for (const s of subList) {
         try {
           const status = await sendPush(s.sub, payload);
           if (status === 201 || status === 200) sent++;
           else { failed++; if (status === 404 || status === 410) deadEndpoints.push(s.endpoint); }
+        } catch (e) { failed++; }
+      }
+      // 通道二：微信推送（国内推荐，点开直达应用）
+      const pp = ppByUser[t.user_id];
+      if (pp) {
+        try {
+          const r = await fetch('https://www.pushplus.plus/send', {
+            method: 'POST', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              token: pp, title: '⏰ 待办提醒',
+              content: t.title, template: 'txt',
+              url: 'https://fishtodo.netlify.app',
+            }),
+          });
+          const j = await r.json().catch(() => ({}));
+          if (j && j.code === 200) sent++;
+          else failed++;
         } catch (e) { failed++; }
       }
     }

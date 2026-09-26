@@ -82,6 +82,7 @@ const app = Vue.createApp({
       notifPerm: (typeof Notification !== 'undefined') ? Notification.permission : 'denied',
       pushOn: false,
       pushBusy: false,
+      pushplusDraft: '',
       // UI（Naive UI 主题 + 外观三档 + 主题色）
       uiDark: false,
       appearance: 'auto', // auto | light | dark
@@ -1335,6 +1336,18 @@ const app = Vue.createApp({
       }
     },
 
+    async savePushplus() {
+      const t = (this.pushplusDraft || '').trim();
+      if (this.isCloud && this.user) {
+        try {
+          const { data, error } = await this.sb.auth.updateUser({ data: { pushplus_token: t } });
+          if (error) throw error;
+          if (data && data.user) this.user = data.user;
+        } catch (e) { this.showToast('绑定失败：' + ((e && e.message) || e)); return; }
+      }
+      this.showToast(t ? '✅ 微信推送已绑定（到期自动推送到微信）' : '已解绑微信推送');
+    },
+
     async checkPushState() {
       if (!this.isCloud || !('serviceWorker' in navigator) || !('PushManager' in window)) return;
       try {
@@ -1496,6 +1509,7 @@ const app = Vue.createApp({
       this.nickname = meta.nickname || '';
       this.avatarUrl = meta.avatar_url || '';
       this.nicknameDraft = this.nickname;
+      this.pushplusDraft = meta.pushplus_token || '';
       await this.loadLists();
       await this.loadTasks();
       this.subscribeRealtime();

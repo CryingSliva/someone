@@ -789,6 +789,15 @@ html[data-accent='amber'] { --accent:#f59e0b; --accent-bright:#fbbf24; --accent-
         </p>
         <n-button v-if="!pushOn" type="primary" size="small" :loading="pushBusy" @click="enablePush">🔔 开启离线推送</n-button>
         <n-button v-else size="small" quaternary @click="testPush">发送测试推送（1.5 分钟后）</n-button>
+        <div style="margin-top:12px">
+          <form class="nick-form" @submit.prevent="savePushplus">
+            <n-input v-model:value="pushplusDraft" placeholder="微信推送 Token（pushplus.plus）" size="small"></n-input>
+            <n-button type="primary" size="small" attr-type="submit">绑定</n-button>
+          </form>
+          <p class="trash-note" style="margin:6px 0 0">
+            📱 微信通道：任务到期推送到微信、点通知直达应用（国产手机推荐，pushplus.plus 免费获取 Token）
+          </p>
+        </div>
       </div>
 
       <div class="profile-section">

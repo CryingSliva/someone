@@ -30,3 +30,4 @@ Thumbs.db
 
 .cron_secret
 .vapid_jwk.json
+.pushplus_token
